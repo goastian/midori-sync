@@ -35,4 +35,16 @@ return [
         ],
     ],
 
+    'authentik' => [
+        'base_url' => env('AUTHENTIK_BASE_URL'),
+        'client_id' => env('AUTHENTIK_CLIENT_ID'),
+        'client_secret' => env('AUTHENTIK_CLIENT_SECRET'),
+        'redirect' => env('AUTHENTIK_REDIRECT_URI'),
+    ],
+
+    'sync' => [
+        'hawk_token_duration' => env('SYNC_HAWK_TOKEN_DURATION', 3600),
+        'default_quota_bytes' => env('SYNC_DEFAULT_QUOTA_BYTES', 104857600),
+    ],
+
 ];
