@@ -1,0 +1,359 @@
+/* Midori Sync Extension — Popup Styles */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    width: 360px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px;
+    color: #1f2937;
+    background: #ffffff;
+}
+
+.hidden { display: none !important; }
+
+/* ─── Header ─────────────────────────────────────────────────────────── */
+
+.header {
+    text-align: center;
+    padding: 24px 20px 16px;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.header.compact {
+    padding: 16px 20px 12px;
+    text-align: left;
+}
+
+.logo {
+    width: 48px;
+    height: 48px;
+    margin: 0 auto 12px;
+    background: #f0fdf4;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+h1 {
+    font-size: 18px;
+    font-weight: 700;
+    color: #111827;
+}
+
+h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #111827;
+}
+
+h3 {
+    font-size: 13px;
+    font-weight: 600;
+    color: #374151;
+}
+
+.subtitle {
+    font-size: 12px;
+    color: #6b7280;
+    margin-top: 4px;
+}
+
+/* ─── Form ───────────────────────────────────────────────────────────── */
+
+.form {
+    padding: 16px 20px;
+}
+
+.field {
+    margin-bottom: 12px;
+}
+
+.field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: #374151;
+    margin-bottom: 4px;
+}
+
+.field input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #1f2937;
+    background: #fff;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.field input:focus {
+    border-color: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+}
+
+.field input::placeholder {
+    color: #9ca3af;
+}
+
+/* ─── Buttons ────────────────────────────────────────────────────────── */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s;
+    width: 100%;
+}
+
+.btn-primary {
+    background: #22c55e;
+    color: #fff;
+}
+.btn-primary:hover { background: #16a34a; }
+.btn-primary:active { background: #15803d; }
+.btn-primary:disabled { background: #86efac; cursor: not-allowed; }
+
+.btn-secondary {
+    background: #f3f4f6;
+    color: #374151;
+}
+.btn-secondary:hover { background: #e5e7eb; }
+
+.btn-danger {
+    background: #fff;
+    color: #dc2626;
+    border: 1px solid #fecaca;
+}
+.btn-danger:hover { background: #fef2f2; }
+
+.btn-sm {
+    padding: 5px 12px;
+    font-size: 12px;
+    width: auto;
+}
+
+.btn-block { width: 100%; }
+
+.back-btn {
+    background: none;
+    border: none;
+    color: #22c55e;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 0;
+    margin-bottom: 8px;
+}
+.back-btn:hover { color: #16a34a; }
+
+.link-btn {
+    background: none;
+    border: none;
+    color: #22c55e;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+}
+.link-btn:hover { color: #16a34a; text-decoration: underline; }
+
+/* ─── Error ──────────────────────────────────────────────────────────── */
+
+.error {
+    background: #fef2f2;
+    color: #dc2626;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    margin-bottom: 12px;
+    border: 1px solid #fecaca;
+}
+
+/* ─── User Info ──────────────────────────────────────────────────────── */
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #f0fdf4;
+    color: #22c55e;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.user-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #111827;
+}
+
+.user-email {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+/* ─── Sync List ──────────────────────────────────────────────────────── */
+
+.section {
+    padding: 12px 20px;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.sync-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.sync-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-radius: 8px;
+    transition: background 0.1s;
+}
+
+.sync-item:hover { background: #f9fafb; }
+
+.sync-item-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.sync-icon {
+    font-size: 16px;
+    width: 24px;
+    text-align: center;
+}
+
+.sync-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: #1f2937;
+}
+
+.sync-time {
+    font-size: 11px;
+    color: #9ca3af;
+}
+
+.sync-item-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sync-btn {
+    background: none;
+    border: none;
+    color: #22c55e;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.sync-btn:hover { background: #f0fdf4; }
+
+.sync-toggle {
+    appearance: none;
+    width: 36px;
+    height: 20px;
+    background: #d1d5db;
+    border-radius: 10px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+    border: none;
+    outline: none;
+}
+
+.sync-toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.2s;
+}
+
+.sync-toggle:checked {
+    background: #22c55e;
+}
+
+.sync-toggle:checked::after {
+    transform: translateX(16px);
+}
+
+/* ─── Actions ────────────────────────────────────────────────────────── */
+
+.actions {
+    padding: 12px 20px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.login-hint {
+    text-align: center;
+    font-size: 11px;
+    color: #9ca3af;
+    margin-top: 10px;
+}
+
+.footer-link {
+    text-align: center;
+    padding: 12px 20px 20px;
+}
+
+/* ─── Spinner ────────────────────────────────────────────────────────── */
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.spinning {
+    animation: spin 0.8s linear infinite;
+}

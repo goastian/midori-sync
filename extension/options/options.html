@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Midori Sync — Settings</title>
+    <link rel="stylesheet" href="options.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-inner">
+                <div class="brand">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    <h1>Midori Sync Settings</h1>
+                </div>
+                <div class="user-badge" id="user-badge">
+                    <span id="badge-name">Not signed in</span>
+                </div>
+            </div>
+        </header>
+
+        <main class="main">
+            <!-- Not logged in message -->
+            <div id="not-logged-in" class="card hidden">
+                <div class="empty-state">
+                    <p>You are not signed in. Open the Midori Sync popup to sign in first.</p>
+                </div>
+            </div>
+
+            <!-- Sync Settings -->
+            <section id="sync-settings" class="card">
+                <div class="card-header">
+                    <h2>Sync Schedule</h2>
+                    <p>Configure how often each data type is synchronized.</p>
+                </div>
+                <div class="card-body" id="sync-settings-list"></div>
+            </section>
+
+            <!-- Connected Devices -->
+            <section id="devices-section" class="card">
+                <div class="card-header">
+                    <h2>Connected Devices</h2>
+                    <p>Devices linked to your Midori Sync account.</p>
+                </div>
+                <div class="card-body" id="devices-list">
+                    <div class="empty-state">Loading...</div>
+                </div>
+            </section>
+
+            <!-- Pair New Device -->
+            <section id="pair-section" class="card">
+                <div class="card-header">
+                    <h2>Connect Another Device</h2>
+                    <p>Scan the QR code below from your other device's Midori Sync extension to link it to your account.</p>
+                </div>
+                <div class="card-body pair-body">
+                    <div id="qr-container" class="qr-container">
+                        <button id="generate-qr-btn" class="btn btn-primary">Generate QR Code</button>
+                    </div>
+                    <div id="pair-info" class="pair-info hidden">
+                        <div id="qr-canvas-wrap" class="qr-wrap"></div>
+                        <div class="pair-details">
+                            <label>Or share this code manually:</label>
+                            <div class="code-box">
+                                <code id="pair-code-display"></code>
+                                <button id="copy-code-btn" class="btn btn-sm btn-secondary">Copy</button>
+                            </div>
+                            <p class="pair-expires">Expires in <span id="pair-timer">10:00</span></p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Server Configuration -->
+            <section class="card">
+                <div class="card-header">
+                    <h2>Server</h2>
+                    <p>Midori Sync server information.</p>
+                </div>
+                <div class="card-body">
+                    <div class="info-row">
+                        <span class="info-label">Server URL</span>
+                        <span class="info-value" id="server-url-display">—</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">User ID</span>
+                        <span class="info-value" id="user-uid-display">—</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Device</span>
+                        <span class="info-value" id="device-name-display">—</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Danger Zone -->
+            <section class="card card-danger">
+                <div class="card-header">
+                    <h2>Danger Zone</h2>
+                </div>
+                <div class="card-body">
+                    <div class="danger-row">
+                        <div>
+                            <strong>Sign out</strong>
+                            <p>Disconnect this device from Midori Sync.</p>
+                        </div>
+                        <button id="logout-btn" class="btn btn-danger">Sign Out</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="../lib/qrcode.min.js"></script>
+    <script src="options.js"></script>
+</body>
+</html>
