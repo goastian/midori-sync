@@ -1,58 +1,178 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Midori Sync
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+End-to-end encrypted browser synchronization service for the Midori browser. Compatible with the Firefox Sync 1.5 protocol, authenticated via Authentik SSO (OAuth2/OIDC).
 
-## About Laravel
+## Features
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+- **End-to-end encryption** — Your data is encrypted client-side with a separate passphrase. The server never sees your decrypted data.
+- **Firefox Sync 1.5 compatible** — Works with the built-in sync engine of Firefox-based browsers.
+- **Authentik SSO** — Single Sign-On via OAuth2/OIDC with Authentik.
+- **Sync everything** — Bookmarks, passwords, open tabs, browsing history, form data, add-ons, and more.
+- **User dashboard** — Web panel to manage connected devices, view sync statistics, and configure settings.
+- **Self-hostable** — Deploy with Docker or install manually on your own infrastructure.
+- **PostgreSQL 18** — Robust, production-ready database backend.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Tech Stack
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+| Component | Technology |
+|-----------|-----------|
+| Backend | Laravel 12 (PHP 8.3+) |
+| Frontend | Vue 3 + Inertia.js + TailwindCSS |
+| Database | PostgreSQL 18 |
+| Auth | Authentik (OAuth2/OIDC via Socialite) |
+| Encryption | Client-side AES-256-GCM, PBKDF2 + HKDF key derivation |
+| API | Firefox Sync Storage 1.5 + custom TokenServer |
 
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+## Quick Start with Docker
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+git clone https://github.com/user/midori-sync.git
+cd midori-sync
+cp .env.example .env
+# Edit .env with your Authentik and database credentials
+docker compose up -d
+docker compose exec app php artisan key:generate
+docker compose exec app php artisan migrate --force
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Visit `http://localhost:8000` to access the landing page.
 
-## Contributing
+## Manual Installation
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+### Prerequisites
 
-## Code of Conduct
+- PHP 8.3+ with extensions: `pdo_pgsql`, `pgsql`, `intl`, `zip`, `bcmath`, `mbstring`
+- Composer 2+
+- Node.js 20+ and npm
+- PostgreSQL 18
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+### Steps
 
-## Security Vulnerabilities
+```bash
+git clone https://github.com/user/midori-sync.git
+cd midori-sync
+chmod +x setup.sh
+./setup.sh
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Or manually:
+
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+
+composer install
+php artisan key:generate
+npm ci && npm run build
+php artisan migrate --force
+php artisan serve
+```
+
+## Authentik Configuration
+
+Create an OAuth2/OpenID provider in your Authentik instance:
+
+1. Go to **Applications → Providers → Create**
+2. Select **OAuth2/OpenID Provider**
+3. Configure:
+   - **Name:** Midori Sync
+   - **Authorization flow:** default-provider-authorization-implicit-consent
+   - **Client type:** Confidential
+   - **Client ID:** (copy to `AUTHENTIK_CLIENT_ID` in `.env`)
+   - **Client Secret:** (copy to `AUTHENTIK_CLIENT_SECRET` in `.env`)
+   - **Redirect URIs:** `http://your-domain:8000/auth/authentik/callback`
+   - **Scopes:** `openid`, `profile`, `email`
+4. Create an **Application** linked to this provider
+5. Update your `.env`:
+
+```env
+AUTHENTIK_BASE_URL=https://your-authentik-instance.example.com
+AUTHENTIK_CLIENT_ID=your-client-id
+AUTHENTIK_CLIENT_SECRET=your-client-secret
+AUTHENTIK_REDIRECT_URI=http://your-domain:8000/auth/authentik/callback
+```
+
+## Browser Configuration
+
+To connect your Midori browser to this sync server:
+
+1. Open `about:config` in the address bar
+2. Set `identity.sync.tokenserver.uri` to:
+   ```
+   http://your-domain:8000/api/1.0/sync/1.5
+   ```
+3. Restart the browser
+4. Sign in via the Sync option — you'll be redirected to Authentik
+5. Set your encryption passphrase when prompted
+
+> **Important:** The encryption passphrase is separate from your Authentik login. It encrypts your data locally and is never sent to the server. If you lose it, your synced data cannot be recovered.
+
+## API Endpoints
+
+### TokenServer
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/1.0/sync/1.5` | Exchange Authentik Bearer token for Hawk credentials |
+
+### Sync Storage 1.5
+
+All storage endpoints require Hawk authentication (obtained from TokenServer).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/1.5/{uid}/info/collections` | Collection timestamps |
+| GET | `/api/1.5/{uid}/info/quota` | Storage quota |
+| GET | `/api/1.5/{uid}/info/collection_usage` | Usage per collection |
+| GET | `/api/1.5/{uid}/info/collection_counts` | Item counts per collection |
+| GET | `/api/1.5/{uid}/storage/{collection}` | List BSOs |
+| GET | `/api/1.5/{uid}/storage/{collection}/{id}` | Get single BSO |
+| PUT | `/api/1.5/{uid}/storage/{collection}/{id}` | Create/update BSO |
+| POST | `/api/1.5/{uid}/storage/{collection}` | Batch upload BSOs |
+| DELETE | `/api/1.5/{uid}/storage/{collection}` | Delete collection |
+| DELETE | `/api/1.5/{uid}/storage/{collection}/{id}` | Delete BSO |
+| DELETE | `/api/1.5/{uid}` | Delete all user data |
+
+### Health Checks
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/__heartbeat__` | Application health check |
+| GET | `/api/__lbheartbeat__` | Load balancer health check |
+
+## Encryption Model
+
+```
+Passphrase (entered by user in browser)
+    │
+    ▼
+PBKDF2-SHA256 (600,000 rounds, salt = user_id)
+    │
+    ▼
+Master Key (256 bits)
+    │
+    ├── HKDF(info="midori-sync-encryption") → Encryption Key (AES-256-GCM)
+    └── HKDF(info="midori-sync-hmac")       → HMAC Key (verification)
+
+Each BSO is encrypted client-side before upload.
+The server stores only opaque encrypted blobs.
+```
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `APP_URL` | Public URL of the application | `http://localhost:8000` |
+| `DB_CONNECTION` | Database driver | `pgsql` |
+| `DB_HOST` | PostgreSQL host | `127.0.0.1` |
+| `DB_DATABASE` | Database name | `midori_sync` |
+| `AUTHENTIK_BASE_URL` | Authentik instance URL | — |
+| `AUTHENTIK_CLIENT_ID` | OAuth2 client ID | — |
+| `AUTHENTIK_CLIENT_SECRET` | OAuth2 client secret | — |
+| `AUTHENTIK_REDIRECT_URI` | OAuth2 callback URL | — |
+| `SYNC_HAWK_TOKEN_DURATION` | Hawk token lifetime (seconds) | `3600` |
+| `SYNC_DEFAULT_QUOTA_BYTES` | Default storage quota per user | `104857600` (100MB) |
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+AGPL-3.0 — See [LICENSE](LICENSE) for details.
