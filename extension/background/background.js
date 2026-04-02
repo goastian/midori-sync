@@ -338,7 +338,7 @@ async function handleLogout() {
  * Always reads from storage to avoid race conditions with initializeState().
  */
 async function handleGetState() {
-    const stored = await browser.storage.local.get(['auth', 'syncSettings', 'lastSync', 'serverUrl']);
+    const stored = await browser.storage.local.get(['auth', 'syncSettings', 'lastSync', 'serverUrl', 'storageInfo']);
 
     // Ensure in-memory state is up to date
     if (stored.auth && stored.auth.token && !authState.token) {
@@ -353,6 +353,7 @@ async function handleGetState() {
         serverUrl: authState.serverUrl,
         syncSettings: stored.syncSettings || {},
         lastSync: stored.lastSync || {},
+        storageInfo: stored.storageInfo || null,
         syncTypes: SYNC_TYPES,
     };
 }
@@ -449,6 +450,9 @@ async function syncDataType(type) {
         const lastSync = stored.lastSync || {};
         lastSync[type] = now;
         await browser.storage.local.set({ lastSync });
+
+        // Refresh storage quota info (best-effort)
+        refreshStorageInfo();
 
         console.log(`[Midori Sync] Synced ${type} at ${now}`);
     } catch (err) {
@@ -872,6 +876,25 @@ function authHeaders() {
         Authorization: `Bearer ${authState.token}`,
         Accept: 'application/json',
     };
+}
+
+/**
+ * Fetch storage quota info from the server and cache it locally.
+ * Non-critical: errors are silently ignored.
+ */
+async function refreshStorageInfo() {
+    if (!authState.token) return;
+    try {
+        const response = await fetch(`${authState.serverUrl}/api/ext/storage/info`, {
+            headers: authHeaders(),
+        });
+        if (response.ok) {
+            const data = await response.json();
+            await browser.storage.local.set({ storageInfo: data });
+        }
+    } catch (e) {
+        // Non-critical, ignore
+    }
 }
 
 /**
