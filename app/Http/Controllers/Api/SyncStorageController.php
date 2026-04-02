@@ -7,6 +7,7 @@ use App\Services\SyncStorageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Sync Storage API controller — implements the Firefox Sync 1.5 storage API.
@@ -78,6 +79,24 @@ class SyncStorageController extends Controller
     }
 
     /**
+     * GET /1.5/{uid}/info/configuration
+     *
+     * Returns server-side limits and capabilities for sync clients.
+     */
+    public function getConfiguration(Request $request, int $uid): JsonResponse
+    {
+        return $this->syncResponse([
+            'max_record_payload_bytes' => 262144,
+            'max_post_records' => 100,
+            'max_request_bytes' => 5242880,
+            'max_total_records' => 1000000,
+            'max_total_bytes' => 104857600,
+            'implicit_collectionname' => false,
+            'gzip' => true,
+        ]);
+    }
+
+    /**
      * GET /1.5/{uid}/storage/{collection}
      *
      * Returns BSOs from a collection, with optional filtering and pagination.
@@ -101,6 +120,9 @@ class SyncStorageController extends Controller
         $result = $this->syncService->getBsos($user, $collection, $params);
 
         $headers = $this->syncHeaders();
+        if (isset($result['items']) && is_array($result['items'])) {
+            $headers['X-Weave-Records'] = (string) count($result['items']);
+        }
         if ($result['offset'] !== null) {
             $headers['X-Weave-Next-Offset'] = $result['offset'];
         }
@@ -176,7 +198,22 @@ class SyncStorageController extends Controller
         }
 
         $bsos = $request->json()->all();
+
+        if (count($bsos) > 100) {
+            return response()->json([
+                'error' => 'batch-size-exceeded',
+                'message' => 'Maximum 100 records per request',
+            ], 400)->withHeaders($this->syncHeaders());
+        }
+
         $result = $this->syncService->postBsos($user, $collection, $bsos);
+
+        Log::info('sync_post_collection_completed', [
+            'user_id' => $user->id,
+            'collection' => $collection,
+            'success_count' => count($result['success']),
+            'failed_count' => count($result['failed']),
+        ]);
 
         return response()->json($result)
             ->withHeaders(array_merge($this->syncHeaders(), [
@@ -251,6 +288,9 @@ class SyncStorageController extends Controller
     {
         return [
             'X-Weave-Timestamp' => round(microtime(true), 2),
+            'X-Last-Modified' => (string) round(microtime(true) * 1000),
+            'Content-Type' => 'application/json; charset=utf-8',
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
         ];
     }
 }

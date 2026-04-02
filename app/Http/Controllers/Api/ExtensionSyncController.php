@@ -10,6 +10,7 @@ use App\Models\UserCollection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Simplified sync storage controller for the Midori Sync browser extension.
@@ -31,20 +32,38 @@ class ExtensionSyncController extends Controller
             return response()->json(['error' => 'unauthorized'], 401);
         }
 
-        $col = Collection::firstOrCreate(['name' => $collection]);
+        $col = Collection::where('name', $collection)->first();
+        if (!$col) {
+            return response()->json([]);
+        }
 
-        $bsos = Bso::where('user_id', $user->id)
+        $newer = $request->query('newer');
+
+        $query = Bso::where('user_id', $user->id)
             ->where('collection_id', $col->id)
             ->where(function ($q) {
-                $q->whereNull('ttl')->orWhere('ttl', '>', now()->timestamp);
-            })
-            ->get()
+                $q->whereNull('expiry')->orWhere('expiry', '>', now());
+            });
+
+        if ($newer !== null) {
+            $query->where('modified', '>', (float) $newer);
+        }
+
+        $bsos = $query->get()
             ->map(fn (Bso $bso) => [
                 'id' => $bso->bso_id,
                 'payload' => $bso->payload,
                 'modified' => $bso->modified,
                 'sortindex' => $bso->sortindex,
+                'ttl' => $bso->ttl,
             ]);
+
+        Log::info('ext_get_collection', [
+            'user_id' => $user->id,
+            'collection' => $collection,
+            'items' => $bsos->count(),
+            'newer' => $newer,
+        ]);
 
         return response()->json($bsos);
     }
@@ -63,44 +82,72 @@ class ExtensionSyncController extends Controller
 
         $col = Collection::firstOrCreate(['name' => $collection]);
         $bsos = $request->json()->all();
+
+        if (count($bsos) > 100) {
+            return response()->json([
+                'error' => 'batch-size-exceeded',
+                'message' => 'Maximum 100 records per request',
+            ], 400);
+        }
+
         $now = microtime(true);
+        $upsertData = [];
         $success = [];
         $failed = [];
 
         foreach ($bsos as $item) {
             $bsoId = $item['id'] ?? null;
-            $payload = $item['payload'] ?? '';
+            $payload = (string) ($item['payload'] ?? '');
 
             if (!$bsoId) {
-                $failed[] = ['id' => $bsoId, 'error' => 'missing id'];
+                $failed['unknown-' . count($failed)] = ['missing id'];
+                continue;
+            }
+
+            if (strlen($payload) > 262144) {
+                $failed[$bsoId] = ['payload size exceeded'];
                 continue;
             }
 
             try {
-                DB::table('bso')->upsert(
-                    [
-                        'user_id' => $user->id,
-                        'collection_id' => $col->id,
-                        'bso_id' => $bsoId,
-                        'payload' => $payload,
-                        'payload_size' => strlen($payload),
-                        'modified' => $now,
-                        'sortindex' => $item['sortindex'] ?? 0,
-                        'ttl' => isset($item['ttl']) ? now()->timestamp + $item['ttl'] : null,
-                    ],
-                    ['user_id', 'collection_id', 'bso_id'],
-                    ['payload', 'payload_size', 'modified', 'sortindex', 'ttl']
-                );
-                $success[] = $bsoId;
+                $ttl = isset($item['ttl']) ? (int) $item['ttl'] : null;
+                $upsertData[] = [
+                    'user_id' => $user->id,
+                    'collection_id' => $col->id,
+                    'bso_id' => $bsoId,
+                    'payload' => $payload,
+                    'payload_size' => strlen($payload),
+                    'modified' => $now,
+                    'sortindex' => $item['sortindex'] ?? 0,
+                    'ttl' => $ttl,
+                    'expiry' => $ttl !== null ? now()->addSeconds($ttl) : null,
+                ];
             } catch (\Throwable $e) {
-                $failed[] = ['id' => $bsoId, 'error' => $e->getMessage()];
+                $failed[$bsoId] = [$e->getMessage()];
             }
         }
+
+        if (!empty($upsertData)) {
+            DB::table('bso')->upsert(
+                $upsertData,
+                ['user_id', 'collection_id', 'bso_id'],
+                ['payload', 'payload_size', 'modified', 'sortindex', 'ttl', 'expiry']
+            );
+            $success = array_column($upsertData, 'bso_id');
+        }
+
+        Log::info('ext_post_collection', [
+            'user_id' => $user->id,
+            'collection' => $collection,
+            'received_count' => count($bsos),
+            'success_count' => count($success),
+            'failed_count' => count($failed),
+        ]);
 
         // Update collection timestamp
         UserCollection::updateOrCreate(
             ['user_id' => $user->id, 'collection_id' => $col->id],
-            ['last_modified' => $now]
+            ['modified' => $now]
         );
 
         return response()->json([
@@ -145,7 +192,7 @@ class ExtensionSyncController extends Controller
 
         $collections = UserCollection::where('user_id', $user->id)
             ->join('collections', 'collections.id', '=', 'user_collections.collection_id')
-            ->pluck('user_collections.last_modified', 'collections.name');
+            ->pluck('user_collections.modified', 'collections.name');
 
         $counts = Bso::where('bso.user_id', $user->id)
             ->join('collections', 'collections.id', '=', 'bso.collection_id')
@@ -175,6 +222,8 @@ class ExtensionSyncController extends Controller
             return null;
         }
 
-        return User::where('api_token', hash('sha256', $token))->first();
+        $hashedToken = hash('sha256', $token);
+
+        return User::where('api_token', $hashedToken)->first();
     }
 }
