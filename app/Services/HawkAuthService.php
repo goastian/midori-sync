@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Models\HawkToken;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -54,14 +56,45 @@ class HawkAuthService
 
         $params = $this->parseHawkHeader($authHeader);
 
-        if (!$params || !isset($params['id'])) {
+        if (!$params || !isset($params['id'], $params['ts'], $params['nonce'], $params['mac'])) {
+            Log::warning('hawk_auth_rejected', ['reason' => 'missing_required_params']);
+            return null;
+        }
+
+        $skew = (int) config('services.sync.hawk_clock_skew_seconds', 60);
+        $now = time();
+        $clientTs = (int) $params['ts'];
+        if (abs($now - $clientTs) > $skew) {
+            Log::warning('hawk_auth_rejected', [
+                'reason' => 'timestamp_skew',
+                'client_ts' => $clientTs,
+                'server_ts' => $now,
+            ]);
+
+            return null;
+        }
+
+        $nonceKey = sprintf('hawk:nonce:%s:%s', $params['id'], $params['nonce']);
+        if (!Cache::add($nonceKey, true, $skew + 30)) {
+            Log::warning('hawk_auth_rejected', ['reason' => 'nonce_replay']);
+
             return null;
         }
 
         $token = HawkToken::find($params['id']);
 
         if (!$token || $token->isExpired()) {
+            Log::warning('hawk_auth_rejected', ['reason' => 'invalid_or_expired_token']);
             return null;
+        }
+
+        if (!empty($params['hash']) && $request->getContent() !== '') {
+            $expectedPayloadHash = base64_encode(hash('sha256', $request->getContent(), true));
+            if (!hash_equals($expectedPayloadHash, $params['hash'])) {
+                Log::warning('hawk_auth_rejected', ['reason' => 'payload_hash_mismatch']);
+
+                return null;
+            }
         }
 
         // Verify the MAC
@@ -69,16 +102,20 @@ class HawkAuthService
             $token,
             $request->method(),
             $request->path(),
+            $request->getQueryString(),
             $request->getHost(),
             $request->getPort(),
-            $params['ts'] ?? '',
-            $params['nonce'] ?? '',
+            $params['ts'],
+            $params['nonce'],
             $params['hash'] ?? null,
         );
 
-        if (!hash_equals($expectedMac, $params['mac'] ?? '')) {
+        if (!hash_equals($expectedMac, $params['mac'])) {
+            Log::warning('hawk_auth_rejected', ['reason' => 'mac_mismatch']);
             return null;
         }
+
+        Log::info('hawk_auth_success', ['token_id' => $token->id, 'user_id' => $token->user_id]);
 
         return $token->user;
     }
@@ -109,17 +146,23 @@ class HawkAuthService
         HawkToken $token,
         string $method,
         string $path,
+        ?string $queryString,
         string $host,
         int $port,
         string $ts,
         string $nonce,
         ?string $hash = null,
     ): string {
+        $resource = '/' . ltrim($path, '/');
+        if (!empty($queryString)) {
+            $resource .= '?' . $queryString;
+        }
+
         $normalized = "hawk.1.header\n"
             . $ts . "\n"
             . $nonce . "\n"
             . strtoupper($method) . "\n"
-            . '/' . ltrim($path, '/') . "\n"
+            . $resource . "\n"
             . strtolower($host) . "\n"
             . $port . "\n"
             . ($hash ?? '') . "\n"
