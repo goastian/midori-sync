@@ -7,6 +7,7 @@ use App\Models\Collection;
 use App\Models\User;
 use App\Models\UserCollection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Core Sync Storage service implementing the Firefox Sync 1.5 storage logic.
@@ -104,7 +105,15 @@ class SyncStorageService
      */
     public function getBsos(User $user, string $collectionName, array $params = []): array
     {
-        $collectionId = $this->resolveCollectionId($collectionName);
+        $collection = Collection::where('name', $collectionName)->first();
+        if (!$collection) {
+            return [
+                'items' => [],
+                'offset' => null,
+            ];
+        }
+
+        $collectionId = $collection->id;
 
         $query = Bso::where('user_id', $user->id)
             ->where('collection_id', $collectionId)
@@ -146,7 +155,13 @@ class SyncStorageService
         // Select fields
         $full = filter_var($params['full'] ?? false, FILTER_VALIDATE_BOOLEAN);
         if ($full) {
-            $items = $query->get()->toArray();
+            $items = $query->get()->map(fn (Bso $bso) => [
+                'id' => $bso->bso_id,
+                'modified' => $bso->modified,
+                'payload' => $bso->payload,
+                'sortindex' => $bso->sortindex,
+                'ttl' => $bso->ttl,
+            ])->toArray();
         } else {
             $items = $query->pluck('bso_id')->toArray();
         }
@@ -171,7 +186,12 @@ class SyncStorageService
      */
     public function getBso(User $user, string $collectionName, string $bsoId): ?array
     {
-        $collectionId = $this->resolveCollectionId($collectionName);
+        $collection = Collection::where('name', $collectionName)->first();
+        if (!$collection) {
+            return null;
+        }
+
+        $collectionId = $collection->id;
 
         $bso = Bso::where('user_id', $user->id)
             ->where('collection_id', $collectionId)
@@ -241,6 +261,13 @@ class SyncStorageService
             ['modified' => $now],
         );
 
+        Log::info('sync_put_bso', [
+            'user_id' => $user->id,
+            'collection' => $collectionName,
+            'bso_id' => $bsoId,
+            'modified' => $now,
+        ]);
+
         return $now;
     }
 
@@ -252,57 +279,56 @@ class SyncStorageService
      */
     public function postBsos(User $user, string $collectionName, array $bsos): array
     {
+        $maxPayloadBytes = 262144;
+        $maxRecords = 100;
+
+        if (count($bsos) > $maxRecords) {
+            throw new \InvalidArgumentException("Maximum {$maxRecords} records per request");
+        }
+
         $collectionId = $this->resolveCollectionId($collectionName);
         $now = $this->getTimestamp();
-        $success = [];
+        $upsertData = [];
         $failed = [];
 
-        DB::transaction(function () use ($user, $collectionId, $bsos, $now, &$success, &$failed) {
-            foreach ($bsos as $bsoData) {
-                $bsoId = $bsoData['id'] ?? null;
+        foreach ($bsos as $bsoData) {
+            $bsoId = $bsoData['id'] ?? null;
 
-                if (!$bsoId || strlen($bsoId) > 64) {
-                    if ($bsoId) {
-                        $failed[$bsoId] = ['invalid id'];
-                    }
-                    continue;
+            if (!$bsoId || strlen($bsoId) > 64) {
+                if ($bsoId) {
+                    $failed[$bsoId] = ['invalid id'];
                 }
+                continue;
+            }
 
-                try {
-                    $attributes = [
-                        'user_id' => $user->id,
-                        'collection_id' => $collectionId,
-                        'bso_id' => $bsoId,
-                        'modified' => $now,
-                    ];
+            $payload = (string) ($bsoData['payload'] ?? '');
+            if ($payload !== '' && strlen($payload) > $maxPayloadBytes) {
+                $failed[$bsoId] = ['payload size exceeded'];
+                continue;
+            }
 
-                    if (isset($bsoData['payload'])) {
-                        $attributes['payload'] = $bsoData['payload'];
-                        $attributes['payload_size'] = strlen($bsoData['payload']);
-                    }
+            $ttl = isset($bsoData['ttl']) ? (int) $bsoData['ttl'] : null;
 
-                    if (isset($bsoData['sortindex'])) {
-                        $attributes['sortindex'] = (int) $bsoData['sortindex'];
-                    }
+            $upsertData[] = [
+                'user_id' => $user->id,
+                'collection_id' => $collectionId,
+                'bso_id' => $bsoId,
+                'payload' => $payload !== '' ? $payload : null,
+                'payload_size' => strlen($payload),
+                'modified' => $now,
+                'sortindex' => isset($bsoData['sortindex']) ? (int) $bsoData['sortindex'] : 0,
+                'ttl' => $ttl,
+                'expiry' => $ttl !== null ? now()->addSeconds($ttl) : null,
+            ];
+        }
 
-                    if (isset($bsoData['ttl'])) {
-                        $attributes['ttl'] = (int) $bsoData['ttl'];
-                        $attributes['expiry'] = now()->addSeconds((int) $bsoData['ttl']);
-                    }
-
-                    Bso::updateOrCreate(
-                        [
-                            'user_id' => $user->id,
-                            'collection_id' => $collectionId,
-                            'bso_id' => $bsoId,
-                        ],
-                        $attributes,
-                    );
-
-                    $success[] = $bsoId;
-                } catch (\Throwable $e) {
-                    $failed[$bsoId] = [$e->getMessage()];
-                }
+        DB::transaction(function () use ($user, $collectionId, $upsertData, $now) {
+            if (!empty($upsertData)) {
+                DB::table('bso')->upsert(
+                    $upsertData,
+                    ['user_id', 'collection_id', 'bso_id'],
+                    ['payload', 'payload_size', 'modified', 'sortindex', 'ttl', 'expiry'],
+                );
             }
 
             // Update collection timestamp
@@ -312,10 +338,21 @@ class SyncStorageService
             );
         });
 
+        $success = array_column($upsertData, 'bso_id');
+
+        Log::info('sync_post_bsos', [
+            'user_id' => $user->id,
+            'collection' => $collectionName,
+            'received_count' => count($bsos),
+            'success_count' => count($success),
+            'failed_count' => count($failed),
+            'modified' => $now,
+        ]);
+
         return [
             'modified' => $now,
             'success' => $success,
-            'failed' => (object) $failed,
+            'failed' => $failed,
         ];
     }
 

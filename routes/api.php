@@ -19,7 +19,7 @@ use Illuminate\Support\Facades\Route;
 */
 
 // TokenServer endpoint — accepts Authentik Bearer token, returns Hawk credentials
-Route::get('/1.0/sync/1.5', [TokenServerController::class, 'getToken']);
+Route::middleware('throttle:10,1')->get('/1.0/sync/1.5', [TokenServerController::class, 'getToken']);
 
 // Heartbeat endpoint for health checks
 Route::get('/__heartbeat__', fn () => response()->json(['status' => 'ok']));
@@ -38,19 +38,24 @@ Route::get('/__lbheartbeat__', fn () => response()->json(null, 200));
 Route::prefix('ext')->middleware(ExtensionCors::class)->group(function () {
     // OAuth2 Authorization Code flow for extension
     // (callback is a web route at /ext/auth/callback — see routes/web.php)
-    Route::get('/auth/start', [ExtensionAuthController::class, 'authStart']);
-    Route::get('/auth/poll', [ExtensionAuthController::class, 'authPoll']);
-    Route::post('/logout', [ExtensionAuthController::class, 'logout']);
+    Route::middleware('throttle:5,1')->group(function () {
+        Route::get('/auth/start', [ExtensionAuthController::class, 'authStart']);
+        Route::get('/auth/poll', [ExtensionAuthController::class, 'authPoll']);
+        Route::post('/logout', [ExtensionAuthController::class, 'logout']);
+    });
+
     Route::get('/profile', [ExtensionAuthController::class, 'profile']);
     Route::post('/pair', [ExtensionAuthController::class, 'generatePairingToken']);
     Route::post('/pair/redeem', [ExtensionAuthController::class, 'redeemPairingToken']);
     Route::post('/sync/status', [ExtensionAuthController::class, 'updateSyncStatus']);
 
     // Simplified sync storage (Bearer token auth)
-    Route::get('/storage/info', [ExtensionSyncController::class, 'getInfo']);
-    Route::get('/storage/{collection}', [ExtensionSyncController::class, 'getCollection']);
-    Route::post('/storage/{collection}', [ExtensionSyncController::class, 'postCollection']);
-    Route::delete('/storage/{collection}', [ExtensionSyncController::class, 'deleteCollection']);
+    Route::middleware('throttle:60,1')->group(function () {
+        Route::get('/storage/info', [ExtensionSyncController::class, 'getInfo']);
+        Route::get('/storage/{collection}', [ExtensionSyncController::class, 'getCollection']);
+        Route::post('/storage/{collection}', [ExtensionSyncController::class, 'postCollection']);
+        Route::delete('/storage/{collection}', [ExtensionSyncController::class, 'deleteCollection']);
+    });
 });
 
 // Sync Storage 1.5 API — protected by Hawk authentication
@@ -60,6 +65,7 @@ Route::prefix('1.5/{uid}')->middleware(HawkAuthentication::class)->group(functio
     Route::get('/info/quota', [SyncStorageController::class, 'getQuota']);
     Route::get('/info/collection_usage', [SyncStorageController::class, 'getCollectionUsage']);
     Route::get('/info/collection_counts', [SyncStorageController::class, 'getCollectionCounts']);
+    Route::get('/info/configuration', [SyncStorageController::class, 'getConfiguration']);
 
     // Storage endpoints
     Route::get('/storage/{collection}', [SyncStorageController::class, 'getBsos']);
