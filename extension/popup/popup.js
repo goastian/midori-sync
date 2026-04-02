@@ -83,6 +83,24 @@ function showMainView(state) {
         avatarEl.innerHTML = `<img src="${state.user.avatar}" alt="Avatar">`;
     }
 
+    // Last sync time (most recent across all types)
+    const lastSyncEl = document.getElementById('last-sync-time');
+    const lastSyncValues = Object.values(state.lastSync || {}).filter(Boolean);
+    if (lastSyncValues.length > 0) {
+        const mostRecent = lastSyncValues.reduce((a, b) => new Date(a) > new Date(b) ? a : b);
+        lastSyncEl.textContent = formatTime(mostRecent);
+    } else {
+        lastSyncEl.textContent = '—';
+    }
+
+    // Storage used
+    const storageEl = document.getElementById('storage-used');
+    if (state.storageInfo?.quota?.used != null) {
+        storageEl.textContent = formatBytes(state.storageInfo.quota.used);
+    } else {
+        storageEl.textContent = '—';
+    }
+
     // Sync items
     renderSyncItems(state.syncTypes, state.syncSettings, state.lastSync);
 }
@@ -325,6 +343,17 @@ function formatTime(isoString) {
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
     return date.toLocaleDateString();
+}
+
+/**
+ * Format byte size to human-readable string.
+ * @param {number} bytes
+ * @returns {string}
+ */
+function formatBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
 /**
