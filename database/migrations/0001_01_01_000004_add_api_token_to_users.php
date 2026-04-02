@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('users', function (Blueprint $table) {
-            $table->string('api_token', 64)->nullable()->unique()->after('storage_quota');
+            $table->string('api_token', 64)->nullable()->unique()->after('storage_quota_bytes');
         });
     }
 
