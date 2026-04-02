@@ -3,6 +3,7 @@
     "private": true,
     "type": "module",
     "scripts": {
+        "test:crypto": "node --test extension/tests/sync-crypto.test.js",
         "build": "vite build",
         "dev": "vite"
     },
