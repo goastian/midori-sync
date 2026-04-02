@@ -38,6 +38,10 @@ class ExtensionSyncController extends Controller
         }
 
         $newer = $request->query('newer');
+        $older = $request->query('older');
+        $limitParam = $request->query('limit');
+        $limit = $limitParam !== null ? min((int) $limitParam, 500) : null;
+        $offset = (int) $request->query('offset', 0);
 
         $query = Bso::where('user_id', $user->id)
             ->where('collection_id', $col->id)
@@ -49,7 +53,15 @@ class ExtensionSyncController extends Controller
             $query->where('modified', '>', (float) $newer);
         }
 
-        $bsos = $query->get()
+        if ($older !== null) {
+            $query->where('modified', '<', (float) $older);
+        }
+
+        if ($limit !== null) {
+            $query->offset($offset)->limit($limit + 1);
+        }
+
+        $bsosCollection = $query->get()
             ->map(fn (Bso $bso) => [
                 'id' => $bso->bso_id,
                 'payload' => $bso->payload,
@@ -58,12 +70,29 @@ class ExtensionSyncController extends Controller
                 'ttl' => $bso->ttl,
             ]);
 
+        $bsos = $bsosCollection->toArray();
+
+        $nextOffset = null;
+        if ($limit !== null && count($bsos) > $limit) {
+            array_pop($bsos);
+            $nextOffset = $offset + $limit;
+        }
+
         Log::info('ext_get_collection', [
             'user_id' => $user->id,
             'collection' => $collection,
-            'items' => $bsos->count(),
+            'items' => count($bsos),
             'newer' => $newer,
+            'limit' => $limit,
+            'offset' => $offset,
         ]);
+
+        if ($limit !== null) {
+            return response()->json([
+                'items' => $bsos,
+                'nextOffset' => $nextOffset,
+            ]);
+        }
 
         return response()->json($bsos);
     }

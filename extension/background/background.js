@@ -24,6 +24,17 @@ let authState = {
     serverUrl: DEFAULT_SERVER,
 };
 
+// Delta sync: timestamp (microtime float) del último item recibido por colección
+let lastSyncTimes = {
+    bookmarks: 0,
+    history: 0,
+    tabs: 0,
+    passwords: 0,
+};
+
+// Debounce: timers pendientes por tipo para coalescencia de eventos
+let syncTimeouts = {};
+
 // ─── Initialization ─────────────────────────────────────────────────────
 
 /**
@@ -32,7 +43,7 @@ let authState = {
  */
 async function initializeState() {
     const stored = await browser.storage.local.get([
-        'auth', 'syncSettings', 'serverUrl',
+        'auth', 'syncSettings', 'serverUrl', 'lastSyncTimes',
     ]);
 
     if (stored.auth) {
@@ -40,6 +51,9 @@ async function initializeState() {
     }
     if (stored.serverUrl) {
         authState.serverUrl = stored.serverUrl;
+    }
+    if (stored.lastSyncTimes) {
+        lastSyncTimes = { ...lastSyncTimes, ...stored.lastSyncTimes };
     }
 
     if (authState.token) {
@@ -119,10 +133,15 @@ async function handleLogin(data) {
     // Step 2: Open Authentik login page in a new tab
     const tab = await browser.tabs.create({ url: auth_url });
 
-    // Step 3: Poll for the result (every 2 seconds, up to 5 minutes)
+    // Step 3: Poll for the result with exponential backoff (up to 5 minutes)
     const maxAttempts = 150;
+    const baseDelay = 1000;
+    const backoffMultiplier = 1.5;
+    const maxDelay = 30000;
+
     for (let i = 0; i < maxAttempts; i++) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        const delay = Math.min(baseDelay * Math.pow(backoffMultiplier, i), maxDelay);
+        await new Promise(resolve => setTimeout(resolve, delay));
 
         // Check if the tab was closed by the user
         try {
@@ -243,17 +262,44 @@ async function restoreBookmarks() {
 /**
  * Restore history from the server into the local browser.
  * Uses browser.history.addUrl to populate entries that don't exist locally.
+ * Persists server data to IndexedDB to avoid saturating storage.local.
  */
 async function restoreHistory() {
     const serverData = await fetchCollection('history');
     if (!serverData || serverData.length === 0) return;
 
+    const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000;
+    const thirtyDaysAgo = Date.now() - THIRTY_DAYS_MS;
+
+    // Solo restaurar historial reciente (30 días)
+    const recentData = serverData.filter(bso => {
+        try {
+            const payload = JSON.parse(bso.payload);
+            return payload.lastVisitTime && payload.lastVisitTime >= thirtyDaysAgo;
+        } catch {
+            return false;
+        }
+    });
+
+    // Guardar en IndexedDB para referencia futura (no en storage.local)
+    const idbItems = recentData.flatMap(bso => {
+        try {
+            return [JSON.parse(bso.payload)];
+        } catch {
+            return [];
+        }
+    });
+    if (idbItems.length > 0) {
+        await storeHistory(idbItems).catch(e =>
+            console.warn('[Midori Sync] IndexedDB store failed:', e)
+        );
+    }
+
     let restored = 0;
-    for (const bso of serverData) {
+    for (const bso of recentData) {
         try {
             const payload = JSON.parse(bso.payload);
             if (payload.url) {
-                // addUrl creates a visit if the URL isn't already in history
                 await browser.history.addUrl({
                     url: payload.url,
                     title: payload.title || '',
@@ -373,26 +419,30 @@ async function handleSaveSyncSettings(data) {
 
 /**
  * Sync a specific data type with the server.
+ * Libera referencias a datos grandes en el bloque finally para ayudar al GC.
  */
 async function syncDataType(type) {
     const now = new Date().toISOString();
+    let syncPromise = null;
 
     try {
         switch (type) {
             case 'bookmarks':
-                await syncBookmarks();
+                syncPromise = syncBookmarks();
                 break;
             case 'history':
-                await syncHistory();
+                syncPromise = syncHistory();
                 break;
             case 'tabs':
-                await syncTabs();
+                syncPromise = syncTabs();
                 break;
             case 'passwords':
                 // Passwords require the optional "logins" permission
-                await syncPasswords();
+                syncPromise = syncPasswords();
                 break;
         }
+
+        if (syncPromise) await syncPromise;
 
         // Update last sync timestamp
         const stored = await browser.storage.local.get('lastSync');
@@ -403,6 +453,8 @@ async function syncDataType(type) {
         console.log(`[Midori Sync] Synced ${type} at ${now}`);
     } catch (err) {
         console.error(`[Midori Sync] Failed to sync ${type}:`, err);
+    } finally {
+        syncPromise = null; // Liberar referencia explícita
     }
 }
 
@@ -472,11 +524,18 @@ function flattenBookmarks(nodes, result = []) {
 
 /**
  * Sync browsing history with the server.
+ * Solo sube historial de los últimos 30 días para reducir payload.
  */
 async function syncHistory() {
+    const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000;
+    const thirtyDaysAgo = Date.now() - THIRTY_DAYS_MS;
+
     const stored = await browser.storage.local.get('lastSync');
     const lastSync = stored.lastSync?.history;
-    const startTime = lastSync ? new Date(lastSync).getTime() : Date.now() - 86400000; // last 24h
+    // Usa lastSync si existe, pero nunca más de 30 días atrás
+    const startTime = lastSync
+        ? Math.max(new Date(lastSync).getTime(), thirtyDaysAgo)
+        : thirtyDaysAgo;
 
     const historyItems = await browser.history.search({
         text: '',
@@ -539,16 +598,76 @@ async function syncPasswords() {
 
 /**
  * Fetch a collection from the sync server.
+ * Usa delta sync: solo descarga items modificados después de lastSyncTimes[collection].
+ * Para colecciones grandes usa fetchCollectionPaginated en su lugar.
  */
-async function fetchCollection(collection) {
+async function fetchCollection(collection, incrementalOnly = true) {
     if (!authState.token) return [];
 
-    const resp = await fetch(`${authState.serverUrl}/api/ext/storage/${collection}`, {
-        headers: authHeaders(),
-    });
+    let url = `${authState.serverUrl}/api/ext/storage/${collection}`;
+    if (incrementalOnly && lastSyncTimes[collection]) {
+        url += `?newer=${lastSyncTimes[collection]}`;
+    }
+
+    const resp = await fetch(url, { headers: authHeaders() });
 
     if (!resp.ok) return [];
-    return await resp.json();
+
+    const items = await resp.json();
+
+    // Actualizar timestamp del último item recibido
+    if (Array.isArray(items) && items.length > 0) {
+        const maxModified = Math.max(...items.map(i => parseFloat(i.modified || 0)));
+        if (maxModified > 0) {
+            lastSyncTimes[collection] = maxModified;
+            await browser.storage.local.set({ lastSyncTimes });
+        }
+    }
+
+    return Array.isArray(items) ? items : [];
+}
+
+/**
+ * Fetch a large collection in paginated chunks of 500 items.
+ * Returns all items (up to maxFetch). Combina con delta sync si hay lastSyncTimes.
+ */
+async function fetchCollectionPaginated(collectionName, maxFetch = 10000) {
+    if (!authState.token) return [];
+
+    let allItems = [];
+    let offset = 0;
+    const limit = 500;
+
+    while (true) {
+        let url = `${authState.serverUrl}/api/ext/storage/${collectionName}?offset=${offset}&limit=${limit}`;
+        if (lastSyncTimes[collectionName]) {
+            url += `&newer=${lastSyncTimes[collectionName]}`;
+        }
+
+        const response = await fetch(url, { headers: authHeaders() });
+        if (!response.ok) break;
+
+        const data = await response.json();
+        // El backend devuelve {items, nextOffset} cuando se especifica limit
+        const pageItems = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
+        allItems = allItems.concat(pageItems);
+
+        if (!data.nextOffset || allItems.length >= maxFetch) {
+            break;
+        }
+        offset = data.nextOffset;
+    }
+
+    // Actualizar timestamp del último item recibido
+    if (allItems.length > 0) {
+        const maxModified = Math.max(...allItems.map(i => parseFloat(i.modified || 0)));
+        if (maxModified > 0) {
+            lastSyncTimes[collectionName] = maxModified;
+            await browser.storage.local.set({ lastSyncTimes });
+        }
+    }
+
+    return allItems;
 }
 
 /**
@@ -664,6 +783,84 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
         await syncDataType(type);
     }
 });
+
+// ─── Debounced Event Listeners ──────────────────────────────────────────
+
+/**
+ * Debounced sync: coalesces rapid consecutive changes into a single sync call.
+ */
+function debouncedSync(type, delayMs = 500) {
+    if (syncTimeouts[type]) {
+        clearTimeout(syncTimeouts[type]);
+    }
+    syncTimeouts[type] = setTimeout(() => {
+        delete syncTimeouts[type];
+        if (authState.token) {
+            syncDataType(type).catch(e =>
+                console.warn(`[Midori Sync] Debounced sync failed for ${type}:`, e)
+            );
+        }
+    }, delayMs);
+}
+
+// Bookmark changes → debounce 2s (coalesce rapid folder/title edits)
+browser.bookmarks.onCreated.addListener(() => debouncedSync('bookmarks', 2000));
+browser.bookmarks.onChanged.addListener(() => debouncedSync('bookmarks', 2000));
+browser.bookmarks.onRemoved.addListener(() => debouncedSync('bookmarks', 2000));
+browser.bookmarks.onMoved.addListener(() => debouncedSync('bookmarks', 2000));
+
+// History visits → debounce 5s (high frequency, batch window)
+browser.history.onVisited.addListener(() => debouncedSync('history', 5000));
+
+// ─── IndexedDB Storage ──────────────────────────────────────────────────
+
+let _idb = null;
+
+/**
+ * Abre (o retorna cached) la base de datos IndexedDB para almacenamiento de datos grandes.
+ */
+async function initializeIndexedDB() {
+    if (_idb) return _idb;
+
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open('midori-sync', 1);
+
+        req.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains('history')) {
+                db.createObjectStore('history', { keyPath: 'url' });
+            }
+            if (!db.objectStoreNames.contains('bookmarks')) {
+                db.createObjectStore('bookmarks', { keyPath: 'id' });
+            }
+        };
+
+        req.onsuccess = () => {
+            _idb = req.result;
+            resolve(_idb);
+        };
+        req.onerror = () => reject(req.error);
+    });
+}
+
+/**
+ * Almacena items de historial en IndexedDB en lugar de storage.local.
+ * Evita llenar el límite de 10MB de storage.local con historiales grandes.
+ */
+async function storeHistory(items) {
+    const db = await initializeIndexedDB();
+    const tx = db.transaction(['history'], 'readwrite');
+    const store = tx.objectStore('history');
+
+    for (const item of items) {
+        store.put(item);
+    }
+
+    return new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+}
 
 // ─── Utilities ──────────────────────────────────────────────────────────
 
