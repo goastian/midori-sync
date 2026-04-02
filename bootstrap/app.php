@@ -12,10 +12,16 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->append([
+            \App\Http\Middleware\RequestObservability::class,
+        ]);
+
         $middleware->web(append: [
             \App\Http\Middleware\HandleInertiaRequests::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        if (class_exists(\Sentry\Laravel\Integration::class)) {
+            \Sentry\Laravel\Integration::handles($exceptions);
+        }
     })->create();
