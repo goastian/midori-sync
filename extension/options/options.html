@@ -69,8 +69,38 @@
                                 <code id="pair-code-display"></code>
                                 <button id="copy-code-btn" class="btn btn-sm btn-secondary">Copy</button>
                             </div>
+                            <div id="pair-enc-key-box" class="code-box" style="margin-top:8px;display:none">
+                                <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:2px;">Encryption Key (also required on the other device):</label>
+                                <code id="pair-enc-key-display" style="word-break:break-all;font-size:10px;"></code>
+                                <button id="copy-enc-key-btn" class="btn btn-sm btn-secondary">Copy</button>
+                            </div>
                             <p class="pair-expires">Expires in <span id="pair-timer">10:00</span></p>
                         </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Encryption -->
+            <section class="card" id="encryption-section">
+                <div class="card-header">
+                    <h2>Encryption</h2>
+                    <p>AES-GCM-256 end-to-end encryption. Your key never leaves this device.</p>
+                </div>
+                <div class="card-body">
+                    <div class="info-row">
+                        <span class="info-label">Key Fingerprint</span>
+                        <span class="info-value" id="enc-fingerprint">Loading…</span>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:12px;">
+                        <button id="export-key-btn" class="btn btn-secondary">Export Key</button>
+                    </div>
+                    <div style="margin-top:16px;">
+                        <label for="import-key-input" style="display:block;font-size:13px;color:#6b7280;margin-bottom:6px;">Import key from another device</label>
+                        <div style="display:flex;gap:8px;">
+                            <input type="text" id="import-key-input" placeholder="Paste base64 key" style="flex:1;font-family:monospace;font-size:12px;">
+                            <button id="import-key-btn" class="btn btn-secondary">Import</button>
+                        </div>
+                        <p id="import-key-msg" class="hidden" style="font-size:12px;margin-top:6px;"></p>
                     </div>
                 </div>
             </section>

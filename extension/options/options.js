@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('sync-settings').classList.add('hidden');
         document.getElementById('devices-section').classList.add('hidden');
         document.getElementById('pair-section').classList.add('hidden');
+        document.getElementById('encryption-section').classList.add('hidden');
         return;
     }
 
@@ -47,10 +48,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     renderSyncSettings(state.syncTypes, state.syncSettings);
     loadDevices();
+    loadEncryptionInfo();
 
     // Event listeners
     document.getElementById('generate-qr-btn').addEventListener('click', generatePairingQR);
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
+    document.getElementById('export-key-btn').addEventListener('click', handleExportKey);
+    document.getElementById('import-key-btn').addEventListener('click', handleImportKey);
 });
 
 // ─── Sync Settings ──────────────────────────────────────────────────────
@@ -201,6 +205,22 @@ async function generatePairingQR() {
             setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
         };
 
+        // Show encryption key if available
+        const encKeyBox = document.getElementById('pair-enc-key-box');
+        const encKeyDisplay = document.getElementById('pair-enc-key-display');
+        const copyEncKeyBtn = document.getElementById('copy-enc-key-btn');
+        if (result.encryption_key_b64) {
+            encKeyDisplay.textContent = result.encryption_key_b64;
+            encKeyBox.style.display = '';
+            copyEncKeyBtn.onclick = async () => {
+                await navigator.clipboard.writeText(result.encryption_key_b64);
+                copyEncKeyBtn.textContent = 'Copied!';
+                setTimeout(() => { copyEncKeyBtn.textContent = 'Copy'; }, 2000);
+            };
+        } else {
+            encKeyBox.style.display = 'none';
+        }
+
         // Generate QR code
         const qrWrap = document.getElementById('qr-canvas-wrap');
         qrWrap.innerHTML = '';
@@ -258,6 +278,77 @@ function startPairingTimer(expiresAt) {
         const secs = remaining % 60;
         timerEl.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
     }, 1000);
+}
+
+// ─── Encryption ─────────────────────────────────────────────────────
+
+/**
+ * Load and display the encryption key fingerprint (SHA-256, first 8 bytes as hex).
+ */
+async function loadEncryptionInfo() {
+    const fingerprintEl = document.getElementById('enc-fingerprint');
+    try {
+        const result = await sendMessage('exportEncryptionKey');
+        if (result?.key) {
+            const raw = Uint8Array.from(atob(result.key), c => c.charCodeAt(0));
+            const hash = await crypto.subtle.digest('SHA-256', raw);
+            const hex = Array.from(new Uint8Array(hash).slice(0, 8))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join(':');
+            fingerprintEl.textContent = hex.toUpperCase();
+        } else {
+            fingerprintEl.textContent = 'Not available';
+        }
+    } catch {
+        fingerprintEl.textContent = 'Error loading key';
+    }
+}
+
+/**
+ * Copy the raw base64 encryption key to the clipboard.
+ */
+async function handleExportKey() {
+    try {
+        const result = await sendMessage('exportEncryptionKey');
+        if (!result?.key) throw new Error('Key not available');
+        await navigator.clipboard.writeText(result.key);
+        const btn = document.getElementById('export-key-btn');
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Export Key'; }, 2000);
+    } catch (err) {
+        alert('Export failed: ' + err.message);
+    }
+}
+
+/**
+ * Import an encryption key from the text field and schedule re-encryption.
+ */
+async function handleImportKey() {
+    const input = document.getElementById('import-key-input');
+    const msgEl = document.getElementById('import-key-msg');
+    msgEl.classList.add('hidden');
+
+    const keyBase64 = input.value.trim();
+    if (!keyBase64) {
+        msgEl.textContent = 'Please paste a base64 key first.';
+        msgEl.style.color = '#ef4444';
+        msgEl.classList.remove('hidden');
+        return;
+    }
+
+    try {
+        const result = await sendMessage('importEncryptionKey', { keyBase64 });
+        if (result.error) throw new Error(result.error);
+        input.value = '';
+        msgEl.textContent = '✓ Key imported. Existing data will be re-encrypted on next startup.';
+        msgEl.style.color = '#22c55e';
+        msgEl.classList.remove('hidden');
+        loadEncryptionInfo();
+    } catch (err) {
+        msgEl.textContent = '✗ Import failed: ' + err.message;
+        msgEl.style.color = '#ef4444';
+        msgEl.classList.remove('hidden');
+    }
 }
 
 // ─── Logout ─────────────────────────────────────────────────────────────

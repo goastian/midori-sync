@@ -39,7 +39,7 @@
     },
 
     "background": {
-        "scripts": ["lib/qrcode.min.js", "background/background.js"],
+        "scripts": ["lib/qrcode.min.js", "lib/sync-crypto.js", "background/background.js"],
         "persistent": false
     },
 

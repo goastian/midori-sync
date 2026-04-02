@@ -53,6 +53,10 @@
                 <label for="pair-code">Pairing Code</label>
                 <input type="text" id="pair-code" placeholder="Enter 32-character code" required>
             </div>
+            <div class="field">
+                <label for="pair-encryption-key">Encryption Key <span style="font-weight:400;color:#9ca3af">(from other device's Settings → Encryption)</span></label>
+                <input type="text" id="pair-encryption-key" placeholder="Paste base64 encryption key">
+            </div>
             <div id="pair-error" class="error hidden"></div>
             <button type="submit" class="btn btn-primary">Connect Device</button>
         </form>

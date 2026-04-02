@@ -249,9 +249,12 @@ function setupEventListeners() {
                 throw new Error('Pairing code must be exactly 32 characters');
             }
 
+            const encKey = document.getElementById('pair-encryption-key')?.value.trim() || null;
+
             const result = await sendMessage('redeemPairingToken', {
                 pairingToken: code,
                 serverUrl: document.getElementById('pair-server').value,
+                encryptionKey: encKey || undefined,
             });
 
             if (result.error) throw new Error(result.error);

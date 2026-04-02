@@ -35,6 +35,71 @@ let lastSyncTimes = {
 // Debounce: timers pendientes por tipo para coalescencia de eventos
 let syncTimeouts = {};
 
+// In-memory CryptoKey para cifrado AES-GCM-256. Nunca sale del cliente.
+let encryptionKey = null;
+
+const syncCrypto = globalThis.MidoriSyncCrypto;
+if (!syncCrypto) {
+    throw new Error('MidoriSyncCrypto library is not loaded');
+}
+
+const {
+    generateEncryptionKey,
+    exportKeyBase64,
+    importKeyBase64,
+    encryptPayload,
+    decryptBsoPayload,
+} = syncCrypto;
+
+/**
+ * Load or generate the AES-GCM-256 encryption key.
+ *
+ * First run: generates a fresh key, persists it to storage.local, and sets
+ * encryptionMigrationNeeded so existing plaintext server data is re-encrypted.
+ * Subsequent runs: imports the persisted key from storage.local into memory.
+ */
+async function initEncryptionKey() {
+    const stored = await browser.storage.local.get('encryptionKey');
+    if (stored.encryptionKey) {
+        encryptionKey = await importKeyBase64(stored.encryptionKey);
+        return;
+    }
+    // First time — generate, persist, and mark data for migration.
+    encryptionKey = await generateEncryptionKey();
+    const b64 = await exportKeyBase64(encryptionKey);
+    await browser.storage.local.set({
+        encryptionKey: b64,
+        encryptionMigrationNeeded: true,
+    });
+    // Reset delta-sync timestamps so migration downloads all existing items.
+    lastSyncTimes = { bookmarks: 0, history: 0, tabs: 0, passwords: 0 };
+    await browser.storage.local.set({ lastSyncTimes });
+    console.log('[Midori Sync] New encryption key generated.');
+}
+
+/**
+ * Re-encrypt all existing server-side plaintext data.
+ * Runs once after a fresh key is generated (encryptionMigrationNeeded flag).
+ * The upload path now encrypts automatically, so we download → re-upload.
+ */
+async function migrateToEncryption() {
+    console.log('[Midori Sync] Migrating existing data to encrypted storage...');
+    const collections = ['bookmarks', 'history', 'tabs'];
+    for (const col of collections) {
+        try {
+            const items = await fetchCollection(col, false);
+            if (items.length === 0) continue;
+            const bsos = items.map(item => ({ id: item.id, payload: item.payload }));
+            await uploadBsos(col, bsos);
+            console.log(`[Midori Sync] Migrated ${items.length} items in '${col}'.`);
+        } catch (e) {
+            console.warn(`[Midori Sync] Migration failed for '${col}':`, e);
+        }
+    }
+    await browser.storage.local.remove('encryptionMigrationNeeded');
+    console.log('[Midori Sync] Encryption migration complete.');
+}
+
 // ─── Initialization ─────────────────────────────────────────────────────
 
 /**
@@ -43,7 +108,7 @@ let syncTimeouts = {};
  */
 async function initializeState() {
     const stored = await browser.storage.local.get([
-        'auth', 'syncSettings', 'serverUrl', 'lastSyncTimes',
+        'auth', 'syncSettings', 'serverUrl', 'lastSyncTimes', 'encryptionMigrationNeeded',
     ]);
 
     if (stored.auth) {
@@ -56,9 +121,16 @@ async function initializeState() {
         lastSyncTimes = { ...lastSyncTimes, ...stored.lastSyncTimes };
     }
 
+    await initEncryptionKey();
+
     if (authState.token) {
         setupSyncAlarms(stored.syncSettings || {});
         updateBadge('on');
+        if (stored.encryptionMigrationNeeded) {
+            migrateToEncryption().catch(e =>
+                console.warn('[Midori Sync] Background migration failed:', e)
+            );
+        }
     } else {
         updateBadge('off');
     }
@@ -84,6 +156,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         redeemPairingToken: handleRedeemPairingToken,
         getProfile: handleGetProfile,
         removeDevice: handleRemoveDevice,
+        exportEncryptionKey: handleExportEncryptionKey,
+        importEncryptionKey: handleImportEncryptionKey,
     };
 
     const handler = handlers[msg.type];
@@ -200,6 +274,9 @@ async function completeLogin(result, server) {
     const stored = await browser.storage.local.get('syncSettings');
     setupSyncAlarms(stored.syncSettings || {});
     updateBadge('on');
+
+    // Ensure the encryption key is ready before downloading data from server.
+    await initEncryptionKey();
 
     // Restore data from server after login
     try {
@@ -619,16 +696,16 @@ async function fetchCollection(collection, incrementalOnly = true) {
 
     const items = await resp.json();
 
+    if (!Array.isArray(items) || items.length === 0) return [];
+
     // Actualizar timestamp del último item recibido
-    if (Array.isArray(items) && items.length > 0) {
-        const maxModified = Math.max(...items.map(i => parseFloat(i.modified || 0)));
-        if (maxModified > 0) {
-            lastSyncTimes[collection] = maxModified;
-            await browser.storage.local.set({ lastSyncTimes });
-        }
+    const maxModified = Math.max(...items.map(i => parseFloat(i.modified || 0)));
+    if (maxModified > 0) {
+        lastSyncTimes[collection] = maxModified;
+        await browser.storage.local.set({ lastSyncTimes });
     }
 
-    return Array.isArray(items) ? items : [];
+    return Promise.all(items.map(bso => decryptBsoPayload(bso, encryptionKey)));
 }
 
 /**
@@ -671,20 +748,29 @@ async function fetchCollectionPaginated(collectionName, maxFetch = 10000) {
         }
     }
 
-    return allItems;
+    return Promise.all(allItems.map(bso => decryptBsoPayload(bso, encryptionKey)));
 }
 
 /**
  * Upload BSOs to a collection on the sync server.
+ * Each payload is encrypted with AES-GCM-256 before transit.
  */
 async function uploadBsos(collection, bsos) {
     const uid = authState.user?.id;
     if (!uid || bsos.length === 0) return;
 
+    // Encrypt each payload before sending to the server.
+    const encryptedBsos = encryptionKey
+        ? await Promise.all(bsos.map(async bso => ({
+            ...bso,
+            payload: await encryptPayload(bso.payload, encryptionKey),
+        })))
+        : bsos;
+
     await fetch(`${authState.serverUrl}/api/ext/storage/${collection}`, {
         method: 'POST',
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(bsos),
+        body: JSON.stringify(encryptedBsos),
     });
 }
 
@@ -703,14 +789,18 @@ async function handleGeneratePairingToken() {
 
     if (!response.ok) throw new Error('Failed to generate pairing token');
 
-    return await response.json();
+    const serverResult = await response.json();
+    // Include the current encryption key so the pairing device can adopt it
+    // and read all existing data without a separate key-exchange step.
+    const encKeyB64 = encryptionKey ? await exportKeyBase64(encryptionKey) : null;
+    return { ...serverResult, encryption_key_b64: encKeyB64 };
 }
 
 /**
  * Redeem a pairing token from another device.
  */
 async function handleRedeemPairingToken(data) {
-    const { pairingToken, serverUrl } = data;
+    const { pairingToken, serverUrl, encryptionKey: incomingKey } = data;
     const server = serverUrl || authState.serverUrl;
 
     const browserInfo = await browser.runtime.getBrowserInfo().catch(() => ({
@@ -734,6 +824,12 @@ async function handleRedeemPairingToken(data) {
 
     const result = await response.json();
 
+    // If the pairing includes an encryption key from the other device, adopt
+    // it so both devices share the same key and can read each other's data.
+    if (incomingKey) {
+        await browser.storage.local.set({ encryptionKey: incomingKey });
+    }
+
     authState = {
         token: result.token,
         user: result.user,
@@ -742,6 +838,9 @@ async function handleRedeemPairingToken(data) {
     };
 
     await browser.storage.local.set({ auth: authState, serverUrl: server });
+
+    // Load the shared key (or generate a new one if none was provided).
+    await initEncryptionKey();
 
     const stored = await browser.storage.local.get('syncSettings');
     setupSyncAlarms(stored.syncSettings || {});
@@ -757,6 +856,36 @@ async function handleRemoveDevice(data) {
     if (!authState.token) throw new Error('Not logged in');
 
     // The web dashboard handles this — return info for now
+    return { success: true };
+}
+
+/**
+ * Export the current AES-GCM-256 encryption key as a base64 string.
+ * Used by the options page to display/copy the key for manual transfer.
+ */
+async function handleExportEncryptionKey() {
+    if (!encryptionKey) throw new Error('No encryption key loaded');
+    return { key: await exportKeyBase64(encryptionKey) };
+}
+
+/**
+ * Import an AES-GCM-256 encryption key from a base64 string.
+ * Replaces the current key and schedules a full re-encryption migration.
+ */
+async function handleImportEncryptionKey(data) {
+    const { keyBase64 } = data;
+    if (!keyBase64) throw new Error('Missing keyBase64');
+    // Validate by importing before persisting.
+    const imported = await importKeyBase64(keyBase64);
+    await browser.storage.local.set({
+        encryptionKey: keyBase64,
+        encryptionMigrationNeeded: true,
+    });
+    encryptionKey = imported;
+    // Reset delta sync so migration re-downloads everything for re-encryption.
+    lastSyncTimes = { bookmarks: 0, history: 0, tabs: 0, passwords: 0 };
+    await browser.storage.local.set({ lastSyncTimes });
+    console.log('[Midori Sync] Encryption key imported. Migration scheduled.');
     return { success: true };
 }
 
