@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+    <!-- Toast Notifications Container -->
+    <div id="toast-container"></div>
     <!-- Login View -->
     <div id="view-login" class="view hidden">
         <div class="header">
@@ -25,10 +27,7 @@
                 <input type="url" id="server-url" placeholder="http://localhost:8000" value="http://localhost:8000">
             </div>
             <div id="login-error" class="error hidden"></div>
-            <button id="login-btn" class="btn btn-primary">
-                <span class="btn-text">Sign in with Astian Account</span>
-                <span class="btn-loading hidden">Waiting for login...</span>
-            </button>
+            <button id="login-btn" class="btn btn-primary">Sign in with Astian Account</button>
             <p class="login-hint">A new tab will open for you to sign in securely.</p>
         </div>
 
@@ -55,10 +54,7 @@
                 <input type="text" id="pair-code" placeholder="Enter 32-character code" required>
             </div>
             <div id="pair-error" class="error hidden"></div>
-            <button type="submit" class="btn btn-primary">
-                <span class="btn-text">Connect Device</span>
-                <span class="btn-loading hidden">Connecting...</span>
-            </button>
+            <button type="submit" class="btn btn-primary">Connect Device</button>
         </form>
     </div>
 
@@ -76,6 +72,26 @@
                     <div class="user-name" id="user-name">User</div>
                     <div class="user-email" id="user-email">user@email.com</div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Status Panel (Phase 1.5) -->
+        <div class="status-panel">
+            <div class="status-item">
+                <span class="status-label">Last Sync</span>
+                <span class="status-value" id="last-sync-time">—</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Sync Interval</span>
+                <span class="status-value" id="sync-interval">Automatic</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Failed Syncs</span>
+                <span class="status-value" id="sync-errors">0</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Storage Used</span>
+                <span class="status-value" id="storage-used">—</span>
             </div>
         </div>
 
