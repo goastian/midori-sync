@@ -19,9 +19,14 @@ services:
       - DB_DATABASE=${DB_DATABASE:-midori_sync}
       - DB_USERNAME=${DB_USERNAME:-midori}
       - DB_PASSWORD=${DB_PASSWORD:-midori}
-      - SESSION_DRIVER=database
-      - CACHE_STORE=database
-      - QUEUE_CONNECTION=database
+      - SESSION_DRIVER=redis
+      - CACHE_STORE=redis
+      - QUEUE_CONNECTION=redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_CACHE_DB=1
+      - REDIS_CACHE_CONNECTION=cache
       - AUTHENTIK_BASE_URL=${AUTHENTIK_BASE_URL}
       - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
       - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}
@@ -30,6 +35,8 @@ services:
       - SYNC_DEFAULT_QUOTA_BYTES=${SYNC_DEFAULT_QUOTA_BYTES:-104857600}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - app-storage:/var/www/html/storage
@@ -52,6 +59,21 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: midori-sync-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT_EXTERNAL:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis-data:/data
+
 volumes:
   postgres-data:
   app-storage:
+  redis-data:
