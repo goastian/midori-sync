@@ -32,7 +32,7 @@ class TokenServerService
     {
         $hawk = $this->hawkService->generateToken($user);
         $duration = (int) config('services.sync.hawk_token_duration', 3600);
-        $apiEndpoint = rtrim(config('app.url'), '/') . '/1.5/' . $user->id;
+        $apiEndpoint = rtrim(config('app.url'), '/') . '/api/1.5/' . $user->id;
 
         return [
             'id' => $hawk['id'],
