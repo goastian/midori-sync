@@ -113,6 +113,9 @@ function renderSyncItems(syncTypes, settings, lastSync) {
     container.innerHTML = '';
 
     for (const [type, defaults] of Object.entries(syncTypes)) {
+        // Skip types that are fundamentally unavailable (e.g. passwords — no WebExtension API)
+        if (defaults.enabled === false) continue;
+
         const config = settings[type] || {};
         const enabled = config.enabled ?? defaults.enabled;
         const last = lastSync?.[type];
@@ -147,17 +150,18 @@ function renderSyncItems(syncTypes, settings, lastSync) {
     // Sync individual type buttons
     container.querySelectorAll('.sync-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
-            const type = e.currentTarget.dataset.type;
+            const clickedBtn = e.currentTarget; // capture before any await — currentTarget becomes null after await in Firefox
+            const type = clickedBtn.dataset.type;
             const label = SYNC_ICONS[type] ? Object.entries(SYNC_ICONS).find(([k]) => k === type)?.[1] : type;
             
-            e.currentTarget.classList.add('spinning');
+            clickedBtn.classList.add('spinning');
             try {
                 await sendMessage('syncNow', { type });
                 showToast(`✓ ${type} synced successfully`, 2000, 'success');
             } catch (err) {
                 showToast(`✗ Failed to sync ${type}`, 3000, 'error');
             } finally {
-                e.currentTarget.classList.remove('spinning');
+                clickedBtn.classList.remove('spinning');
 
                 // Refresh state
                 const state = await sendMessage('getState');

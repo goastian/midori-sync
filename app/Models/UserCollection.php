@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -24,6 +25,12 @@ class UserCollection extends Model
      * Indicates if the IDs are auto-incrementing.
      */
     public $incrementing = false;
+
+    /**
+     * This table uses a composite primary key (user_id, collection_id)
+     * and does not have a standalone "id" column.
+     */
+    protected $primaryKey = null;
 
     /**
      * The attributes that are mass assignable.
@@ -62,5 +69,15 @@ class UserCollection extends Model
     public function collection(): BelongsTo
     {
         return $this->belongsTo(Collection::class);
+    }
+
+    /**
+     * Ensure update queries use the composite key instead of the default "id".
+     */
+    protected function setKeysForSaveQuery($query): Builder
+    {
+        return $query
+            ->where('user_id', $this->getAttribute('user_id'))
+            ->where('collection_id', $this->getAttribute('collection_id'));
     }
 }

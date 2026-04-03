@@ -276,6 +276,97 @@ class ExampleTest extends TestCase
         $this->assertArrayHasKey('bookmarks', $info->json('collections'));
     }
 
+    /**
+     * El endpoint de extensión ahora acepta hasta 500 items por lote.
+     * Esto permite sincronizar el historial completo de 30 días sin batching manual.
+     */
+    public function test_extension_api_accepts_batch_up_to_500(): void
+    {
+        $token = 'token-batch-500';
+        $user = User::factory()->create([
+            'api_token' => hash('sha256', $token),
+        ]);
+
+        $batch = [];
+        for ($i = 0; $i < 500; $i++) {
+            $batch[] = ['id' => 'hist-' . $i, 'payload' => base64_encode(str_repeat('x', 50))];
+        }
+
+        $response = $this->withHeaders(['Authorization' => 'Bearer ' . $token])
+            ->postJson('/api/ext/storage/history', $batch);
+
+        $response->assertOk();
+        $this->assertCount(500, $response->json('success'));
+        $this->assertDatabaseHas('bso', ['user_id' => $user->id, 'bso_id' => 'hist-0']);
+        $this->assertDatabaseHas('bso', ['user_id' => $user->id, 'bso_id' => 'hist-499']);
+    }
+
+    /**
+     * El endpoint de extensión rechaza lotes de más de 500 items.
+     */
+    public function test_extension_api_rejects_batch_over_500(): void
+    {
+        $token = 'token-batch-501';
+        User::factory()->create([
+            'api_token' => hash('sha256', $token),
+        ]);
+
+        $batch = [];
+        for ($i = 0; $i < 501; $i++) {
+            $batch[] = ['id' => 'item-' . $i, 'payload' => 'a'];
+        }
+
+        $response = $this->withHeaders(['Authorization' => 'Bearer ' . $token])
+            ->postJson('/api/ext/storage/history', $batch);
+
+        $response->assertStatus(400)->assertJsonPath('error', 'batch-size-exceeded');
+    }
+
+    /**
+     * Verifica que lotes de 101-100 items (antes rechazados, ahora aceptados)
+     * se almacenan correctamente en la base de datos.
+     */
+    public function test_extension_api_accepts_101_items_that_were_previously_rejected(): void
+    {
+        $token = 'token-batch-101';
+        $user = User::factory()->create([
+            'api_token' => hash('sha256', $token),
+        ]);
+
+        $batch = [];
+        for ($i = 0; $i < 101; $i++) {
+            $batch[] = ['id' => 'bk-' . $i, 'payload' => json_encode(['url' => "https://example.com/{$i}"])];
+        }
+
+        $response = $this->withHeaders(['Authorization' => 'Bearer ' . $token])
+            ->postJson('/api/ext/storage/bookmarks', $batch);
+
+        $response->assertOk();
+        $this->assertSame(101, Bso::where('user_id', $user->id)->count());
+    }
+
+    public function test_extension_api_handles_duplicate_bso_ids_in_same_batch(): void
+    {
+        $token = 'token-duplicate-bso';
+        $user = User::factory()->create([
+            'api_token' => hash('sha256', $token),
+        ]);
+
+        $response = $this->withHeaders(['Authorization' => 'Bearer ' . $token])
+            ->postJson('/api/ext/storage/bookmarks', [
+                ['id' => 'bk-dup', 'payload' => 'first'],
+                ['id' => 'bk-dup', 'payload' => 'second'],
+            ]);
+
+        $response->assertOk();
+        $this->assertSame(['bk-dup'], $response->json('success'));
+        $this->assertDatabaseHas('bso', [
+            'user_id' => $user->id,
+            'bso_id' => 'bk-dup',
+            'payload' => 'second',
+        ]);
+    }
+
     public function test_extension_cors_forbidden_origin_and_rate_limit(): void
     {
         config()->set('services.sync.extension_cors_origins', 'moz-extension://good,chrome-extension://ok');

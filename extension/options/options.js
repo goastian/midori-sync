@@ -38,6 +38,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('devices-section').classList.add('hidden');
         document.getElementById('pair-section').classList.add('hidden');
         document.getElementById('encryption-section').classList.add('hidden');
+        document.getElementById('passwords-section').classList.add('hidden');
         return;
     }
 
@@ -49,12 +50,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderSyncSettings(state.syncTypes, state.syncSettings);
     loadDevices();
     loadEncryptionInfo();
+    loadPasswords();
 
     // Event listeners
     document.getElementById('generate-qr-btn').addEventListener('click', generatePairingQR);
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     document.getElementById('export-key-btn').addEventListener('click', handleExportKey);
     document.getElementById('import-key-btn').addEventListener('click', handleImportKey);
+    setupPasswordForm();
 });
 
 // ─── Sync Settings ──────────────────────────────────────────────────────
@@ -349,6 +352,184 @@ async function handleImportKey() {
         msgEl.style.color = '#ef4444';
         msgEl.classList.remove('hidden');
     }
+}
+
+// ─── Passwords ──────────────────────────────────────────────────────────
+
+/**
+ * Load passwords from background and render the list.
+ */
+async function loadPasswords() {
+    try {
+        const passwords = await sendMessage('getPasswords');
+        renderPasswords(passwords);
+    } catch (err) {
+        document.getElementById('passwords-list').innerHTML =
+            `<div class="empty-state">Could not load passwords: ${err.message}</div>`;
+    }
+}
+
+/**
+ * Render the password list rows.
+ */
+function renderPasswords(passwords) {
+    const container = document.getElementById('passwords-list');
+    container.innerHTML = '';
+
+    if (!passwords || passwords.length === 0) {
+        container.innerHTML = '<div class="empty-state">No saved credentials yet. Add one above.</div>';
+        return;
+    }
+
+    // Sort by site name
+    const sorted = [...passwords].sort((a, b) => (a.site || '').localeCompare(b.site || ''));
+
+    for (const entry of sorted) {
+        const domain = (() => {
+            try { return new URL(entry.site).hostname; } catch { return entry.site; }
+        })();
+
+        const row = document.createElement('div');
+        row.className = 'pw-row';
+        row.innerHTML = `
+            <div class="pw-row-left">
+                <div class="pw-favicon">
+                    <img src="https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(domain)}"
+                         alt="" width="20" height="20" onerror="this.style.display='none'">
+                </div>
+                <div class="pw-row-info">
+                    <div class="pw-row-site">${escapeHtml(domain)}</div>
+                    <div class="pw-row-username">${escapeHtml(entry.username)}</div>
+                    ${entry.notes ? `<div class="pw-row-notes">${escapeHtml(entry.notes)}</div>` : ''}
+                </div>
+            </div>
+            <div class="pw-row-actions">
+                <button class="btn btn-sm btn-secondary pw-copy-btn" data-id="${escapeHtml(entry.id)}" title="Copy password">Copy</button>
+                <button class="btn btn-sm btn-secondary pw-edit-btn" data-id="${escapeHtml(entry.id)}" title="Edit">Edit</button>
+                <button class="btn btn-sm btn-danger pw-delete-btn" data-id="${escapeHtml(entry.id)}" title="Delete">✕</button>
+            </div>
+        `;
+        container.appendChild(row);
+    }
+
+    // Attach handlers
+    container.querySelectorAll('.pw-copy-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const entry = passwords.find(p => p.id === btn.dataset.id);
+            if (!entry) return;
+            await navigator.clipboard.writeText(entry.password);
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+        });
+    });
+
+    container.querySelectorAll('.pw-edit-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const entry = passwords.find(p => p.id === btn.dataset.id);
+            if (!entry) return;
+            startEditPassword(entry);
+        });
+    });
+
+    container.querySelectorAll('.pw-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!confirm(`Delete credentials for ${passwords.find(p => p.id === btn.dataset.id)?.site}?`)) return;
+            try {
+                await sendMessage('deletePassword', { id: btn.dataset.id });
+                loadPasswords();
+            } catch (err) {
+                alert('Delete failed: ' + err.message);
+            }
+        });
+    });
+}
+
+/**
+ * Fill the form for editing an existing entry.
+ */
+function startEditPassword(entry) {
+    document.getElementById('password-form-title').textContent = 'Edit Credential';
+    document.getElementById('password-edit-id').value = entry.id;
+    document.getElementById('pw-site').value = entry.site;
+    document.getElementById('pw-username').value = entry.username;
+    document.getElementById('pw-password').value = entry.password;
+    document.getElementById('pw-notes').value = entry.notes || '';
+    document.getElementById('pw-cancel-btn').classList.remove('hidden');
+    document.getElementById('pw-site').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+/**
+ * Reset the form to "add new" state.
+ */
+function resetPasswordForm() {
+    document.getElementById('password-form-title').textContent = 'Add New Credential';
+    document.getElementById('password-edit-id').value = '';
+    document.getElementById('pw-site').value = '';
+    document.getElementById('pw-username').value = '';
+    document.getElementById('pw-password').value = '';
+    document.getElementById('pw-notes').value = '';
+    document.getElementById('pw-cancel-btn').classList.add('hidden');
+    document.getElementById('password-form-error').classList.add('hidden');
+}
+
+/**
+ * Wire up form event listeners.
+ */
+function setupPasswordForm() {
+    // Toggle password visibility
+    document.getElementById('pw-toggle-visibility').addEventListener('click', () => {
+        const input = document.getElementById('pw-password');
+        input.type = input.type === 'password' ? 'text' : 'password';
+    });
+
+    // Save button
+    document.getElementById('pw-save-btn').addEventListener('click', async () => {
+        const id = document.getElementById('password-edit-id').value || null;
+        const site = document.getElementById('pw-site').value.trim();
+        const username = document.getElementById('pw-username').value.trim();
+        const password = document.getElementById('pw-password').value;
+        const notes = document.getElementById('pw-notes').value.trim();
+        const errEl = document.getElementById('password-form-error');
+
+        if (!site || !username || !password) {
+            errEl.textContent = 'Website, username and password are required.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        errEl.classList.add('hidden');
+
+        const btn = document.getElementById('pw-save-btn');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+
+        try {
+            await sendMessage('savePassword', { id, site, username, password, notes });
+            resetPasswordForm();
+            loadPasswords();
+        } catch (err) {
+            errEl.textContent = 'Save failed: ' + err.message;
+            errEl.classList.remove('hidden');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Save';
+        }
+    });
+
+    // Cancel / reset to add-new
+    document.getElementById('pw-cancel-btn').addEventListener('click', resetPasswordForm);
+}
+
+/**
+ * Escape HTML special characters to prevent XSS in innerHTML.
+ */
+function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 // ─── Logout ─────────────────────────────────────────────────────────────

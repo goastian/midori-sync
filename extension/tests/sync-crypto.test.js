@@ -84,3 +84,66 @@ test('export/import de clave preserva capacidad de descifrado', async () => {
 
     assert.equal(await cryptoApi.decryptPayload(encrypted, importedKey), 'persisted-data');
 });
+
+test('isEncryptedPayload devuelve false para payload JSON con objeto', async () => {
+    const cryptoApi = createContext();
+    assert.equal(cryptoApi.isEncryptedPayload(JSON.stringify({ url: 'https://example.com' })), false);
+});
+
+test('isEncryptedPayload devuelve false para payload JSON con array', async () => {
+    const cryptoApi = createContext();
+    assert.equal(cryptoApi.isEncryptedPayload(JSON.stringify([1, 2, 3])), false);
+});
+
+test('isEncryptedPayload devuelve false para string vacío o null', async () => {
+    const cryptoApi = createContext();
+    assert.equal(cryptoApi.isEncryptedPayload(''), false);
+    assert.equal(cryptoApi.isEncryptedPayload(null), false);
+    assert.equal(cryptoApi.isEncryptedPayload(undefined), false);
+});
+
+test('isEncryptedPayload devuelve true para payload realmente cifrado', async () => {
+    const cryptoApi = createContext();
+    const key = await cryptoApi.generateEncryptionKey();
+    const payload = JSON.stringify({ url: 'https://example.com', title: 'Test' });
+    const encrypted = await cryptoApi.encryptPayload(payload, key);
+    assert.equal(cryptoApi.isEncryptedPayload(encrypted), true);
+});
+
+test('decryptBsoPayload con clave incorrecta retorna bso original sin lanzar error', async () => {
+    const cryptoApi = createContext();
+    const keyA = await cryptoApi.generateEncryptionKey();
+    const keyB = await cryptoApi.generateEncryptionKey();
+    const payload = JSON.stringify({ url: 'https://example.com' });
+    const encrypted = await cryptoApi.encryptPayload(payload, keyA);
+    const bso = { id: 'hi-abc', payload: encrypted };
+
+    // Con clave incorrecta, decryptBsoPayload NO debe lanzar — retorna bso original
+    const result = await cryptoApi.decryptBsoPayload(bso, keyB);
+    assert.equal(result.id, bso.id);
+    assert.equal(result.payload, encrypted); // payload cifrado intacto
+});
+
+test('chunking: múltiples payloads se cifran y descifran correctamente en batch', async () => {
+    const cryptoApi = createContext();
+    const key = await cryptoApi.generateEncryptionKey();
+
+    // Simula lo que hace uploadBsos: cifra cada BSO del batch
+    const originalBsos = Array.from({ length: 150 }, (_, i) => ({
+        id: `hi-${i}`,
+        payload: JSON.stringify({ url: `https://example.com/${i}`, title: `Page ${i}` }),
+    }));
+
+    const encryptedBsos = await Promise.all(originalBsos.map(async bso => ({
+        ...bso,
+        payload: await cryptoApi.encryptPayload(bso.payload, key),
+    })));
+
+    // Simula lo que hace fetchCollection: descifra cada BSO recibido
+    const decryptedBsos = await Promise.all(encryptedBsos.map(bso => cryptoApi.decryptBsoPayload(bso, key)));
+
+    for (let i = 0; i < originalBsos.length; i++) {
+        assert.equal(decryptedBsos[i].id, originalBsos[i].id);
+        assert.equal(decryptedBsos[i].payload, originalBsos[i].payload);
+    }
+});

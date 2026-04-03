@@ -112,15 +112,15 @@ class ExtensionSyncController extends Controller
         $col = Collection::firstOrCreate(['name' => $collection]);
         $bsos = $request->json()->all();
 
-        if (count($bsos) > 100) {
+        if (count($bsos) > 500) {
             return response()->json([
                 'error' => 'batch-size-exceeded',
-                'message' => 'Maximum 100 records per request',
+                'message' => 'Maximum 500 records per request',
             ], 400);
         }
 
         $now = microtime(true);
-        $upsertData = [];
+        $upsertById = [];
         $success = [];
         $failed = [];
 
@@ -140,7 +140,9 @@ class ExtensionSyncController extends Controller
 
             try {
                 $ttl = isset($item['ttl']) ? (int) $item['ttl'] : null;
-                $upsertData[] = [
+                // Keep only one row per bso_id in the same SQL upsert batch.
+                // PostgreSQL rejects batches that contain duplicate conflict keys.
+                $upsertById[$bsoId] = [
                     'user_id' => $user->id,
                     'collection_id' => $col->id,
                     'bso_id' => $bsoId,
@@ -156,13 +158,14 @@ class ExtensionSyncController extends Controller
             }
         }
 
-        if (!empty($upsertData)) {
+        if (!empty($upsertById)) {
+            $upsertData = array_values($upsertById);
             DB::table('bso')->upsert(
                 $upsertData,
                 ['user_id', 'collection_id', 'bso_id'],
                 ['payload', 'payload_size', 'modified', 'sortindex', 'ttl', 'expiry']
             );
-            $success = array_column($upsertData, 'bso_id');
+            $success = array_keys($upsertById);
         }
 
         Log::info('ext_post_collection', [

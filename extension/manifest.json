@@ -19,7 +19,8 @@
         "history",
         "tabs",
         "alarms",
-        "idle"
+        "idle",
+        "<all_urls>"
     ],
 
     "optional_permissions": [],

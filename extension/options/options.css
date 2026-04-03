@@ -387,3 +387,145 @@ body {
 }
 
 .hidden { display: none !important; }
+
+/* ─── Passwords ──────────────────────────────────────────────────────── */
+
+.password-form-container {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 20px;
+}
+
+.form-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 12px;
+}
+
+.pw-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.field label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #374151;
+}
+
+.field input {
+    padding: 7px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #111827;
+    background: #fff;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.field input:focus {
+    border-color: #22c55e;
+}
+
+.pw-input-wrap {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.pw-input-wrap input {
+    flex: 1;
+}
+
+.pw-form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.passwords-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.pw-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.pw-row:last-child {
+    border-bottom: none;
+}
+
+.pw-row-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.pw-favicon {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f3f4f6;
+    border-radius: 4px;
+}
+
+.pw-row-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.pw-row-site {
+    font-size: 13px;
+    font-weight: 600;
+    color: #111827;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 300px;
+}
+
+.pw-row-username {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.pw-row-notes {
+    font-size: 11px;
+    color: #9ca3af;
+    font-style: italic;
+}
+
+.pw-row-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: 12px;
+}
+
+.error {
+    color: #dc2626;
+    font-size: 12px;
+    margin-top: 6px;
+}

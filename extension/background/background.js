@@ -71,9 +71,13 @@ async function initEncryptionKey() {
         encryptionKey: b64,
         encryptionMigrationNeeded: true,
     });
-    // Reset delta-sync timestamps so migration downloads all existing items.
+    // Reset BOTH delta-sync timestamps (downloads) AND lastSync (uploads)
+    // so migration re-downloads all server items and the next syncHistory
+    // does a full paginated upload of the 30-day history, all encrypted
+    // with the new key.
     lastSyncTimes = { bookmarks: 0, history: 0, tabs: 0, passwords: 0 };
     await browser.storage.local.set({ lastSyncTimes });
+    await browser.storage.local.remove('lastSync');
     console.log('[Midori Sync] New encryption key generated.');
 }
 
@@ -158,6 +162,9 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         removeDevice: handleRemoveDevice,
         exportEncryptionKey: handleExportEncryptionKey,
         importEncryptionKey: handleImportEncryptionKey,
+        getPasswords: handleGetPasswords,
+        savePassword: handleSavePassword,
+        deletePassword: handleDeletePassword,
     };
 
     const handler = handlers[msg.type];
@@ -502,6 +509,7 @@ async function handleSaveSyncSettings(data) {
 async function syncDataType(type) {
     const now = new Date().toISOString();
     let syncPromise = null;
+    let shouldMarkSynced = true;
 
     try {
         switch (type) {
@@ -517,10 +525,15 @@ async function syncDataType(type) {
             case 'passwords':
                 // Passwords require the optional "logins" permission
                 syncPromise = syncPasswords();
+                shouldMarkSynced = false;
                 break;
         }
 
         if (syncPromise) await syncPromise;
+
+        if (!shouldMarkSynced) {
+            return;
+        }
 
         // Update last sync timestamp
         const stored = await browser.storage.local.get('lastSync');
@@ -604,8 +617,58 @@ function flattenBookmarks(nodes, result = []) {
 }
 
 /**
+ * Fetch the full browser history for the given time range by paginating
+ * through chunks of 500 items, overcoming the per-search maxResults cap.
+ * Deduplicates by browser item ID. Returns at most MAX_FULL_HISTORY_ITEMS
+ * to keep the upload bounded for very active users.
+ */
+const MAX_FULL_HISTORY_ITEMS = 5000;
+
+async function fetchFullHistory(startTime) {
+    const allItems = [];
+    const seenIds = new Set();
+    let endTime = Date.now();
+    let previousEndTime = null;
+
+    while (allItems.length < MAX_FULL_HISTORY_ITEMS) {
+        const beforeCount = allItems.length;
+        const page = await browser.history.search({
+            text: '',
+            startTime,
+            endTime,
+            maxResults: 500,
+        });
+
+        if (page.length === 0) break;
+
+        for (const item of page) {
+            if (!seenIds.has(item.id)) {
+                seenIds.add(item.id);
+                allItems.push(item);
+            }
+        }
+
+        // If we got fewer than requested we've reached the start of history.
+        if (page.length < 500) break;
+
+        // Next page: items strictly older than the oldest in this page.
+        const oldestVisit = Math.min(...page.map(i => i.lastVisitTime));
+        if (oldestVisit <= startTime) break;
+        endTime = oldestVisit - 1;
+
+        // Safety guards for browsers that ignore endTime or return repeated pages.
+        if (allItems.length === beforeCount) break;
+        if (previousEndTime !== null && endTime >= previousEndTime) break;
+        previousEndTime = endTime;
+    }
+
+    return allItems;
+}
+
+/**
  * Sync browsing history with the server.
- * Solo sube historial de los últimos 30 días para reducir payload.
+ * Initial sync (no lastSync.history): paginates through all 30-day history.
+ * Incremental sync: fetches only items since the last sync timestamp.
  */
 async function syncHistory() {
     const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000;
@@ -618,11 +681,11 @@ async function syncHistory() {
         ? Math.max(new Date(lastSync).getTime(), thirtyDaysAgo)
         : thirtyDaysAgo;
 
-    const historyItems = await browser.history.search({
-        text: '',
-        startTime,
-        maxResults: 500,
-    });
+    // Full (initial) sync: paginate through all history to capture every URL.
+    // Incremental sync: simple bounded search covers the small delta.
+    const historyItems = lastSync
+        ? await browser.history.search({ text: '', startTime, maxResults: 500 })
+        : await fetchFullHistory(thirtyDaysAgo);
 
     if (historyItems.length === 0) return;
 
@@ -666,13 +729,118 @@ async function syncTabs() {
 }
 
 /**
- * Sync passwords.
+ * Sync passwords (built-in password manager).
  *
- * Note: There is no standard WebExtension API for accessing saved passwords.
- * Password sync is not available in the current MVP.
+ * Passwords are stored plaintext in browser.storage.local (sandboxed per
+ * extension, not accessible to websites) and encrypted with AES-GCM-256
+ * before being uploaded to the server.
+ *
+ * Merge strategy: last updatedAt wins per entry id.
  */
 async function syncPasswords() {
-    console.log('[Midori Sync] Password sync is not yet available — no standard WebExtension API exists for saved logins.');
+    const stored = await browser.storage.local.get('passwords');
+    const localPasswords = stored.passwords || [];
+
+    // 1. Upload local entries to server
+    if (localPasswords.length > 0) {
+        await uploadBsos('passwords', localPasswords.map(p => ({
+            id: p.id,
+            payload: JSON.stringify(p),
+        })));
+    }
+
+    // 2. Download entries from server (decrypted by fetchCollection)
+    const serverBsos = await fetchCollection('passwords');
+    if (serverBsos.length === 0) return;
+
+    // 3. Parse payloads
+    const serverPasswords = serverBsos.map(bso => {
+        try {
+            return typeof bso.payload === 'string' ? JSON.parse(bso.payload) : bso.payload;
+        } catch {
+            return null;
+        }
+    }).filter(p => p && p.id);
+
+    if (serverPasswords.length === 0) return;
+
+    // 4. Merge: most recent updatedAt wins per id
+    const merged = new Map(localPasswords.map(p => [p.id, p]));
+    for (const sp of serverPasswords) {
+        const local = merged.get(sp.id);
+        if (!local || new Date(sp.updatedAt) > new Date(local.updatedAt)) {
+            merged.set(sp.id, sp);
+        }
+    }
+
+    await browser.storage.local.set({ passwords: Array.from(merged.values()) });
+    console.log(`[Midori Sync] Password sync complete: ${merged.size} entries.`);
+}
+
+/**
+ * Return all locally stored password entries (plaintext).
+ */
+async function handleGetPasswords() {
+    const stored = await browser.storage.local.get('passwords');
+    return stored.passwords || [];
+}
+
+/**
+ * Save a password entry (create new if no id, update existing if id present).
+ * Triggers an immediate sync after saving.
+ */
+async function handleSavePassword(data) {
+    const { id, site, username, password, notes } = data;
+    if (!site || !username || !password) throw new Error('site, username and password are required');
+
+    const stored = await browser.storage.local.get('passwords');
+    const passwords = stored.passwords || [];
+    const now = new Date().toISOString();
+
+    if (id) {
+        // Update existing
+        const idx = passwords.findIndex(p => p.id === id);
+        if (idx === -1) throw new Error('Password entry not found');
+        passwords[idx] = { ...passwords[idx], site, username, password, notes: notes || '', updatedAt: now };
+    } else {
+        // Create new
+        passwords.push({
+            id: crypto.randomUUID(),
+            site,
+            username,
+            password,
+            notes: notes || '',
+            createdAt: now,
+            updatedAt: now,
+        });
+    }
+
+    await browser.storage.local.set({ passwords });
+
+    // Sync immediately (best-effort)
+    if (authState.token) {
+        syncDataType('passwords').catch(e =>
+            console.warn('[Midori Sync] Post-save password sync failed:', e)
+        );
+    }
+
+    return { success: true };
+}
+
+/**
+ * Delete a password entry by id.
+ * Note: this only removes it locally; the BSO remains on the server until
+ * a server-side delete endpoint is implemented.
+ */
+async function handleDeletePassword(data) {
+    const { id } = data;
+    if (!id) throw new Error('id is required');
+
+    const stored = await browser.storage.local.get('passwords');
+    const passwords = (stored.passwords || []).filter(p => p.id !== id);
+    await browser.storage.local.set({ passwords });
+
+    return { success: true };
 }
 
 // ─── Server Communication ───────────────────────────────────────────────
@@ -754,24 +922,44 @@ async function fetchCollectionPaginated(collectionName, maxFetch = 10000) {
 /**
  * Upload BSOs to a collection on the sync server.
  * Each payload is encrypted with AES-GCM-256 before transit.
+ * Large arrays are split into chunks of BATCH_UPLOAD_CHUNK_SIZE to stay
+ * within the server's per-request batch limit.
+ * Throws on any non-OK HTTP response so callers can detect failures and
+ * avoid advancing their lastSync timestamp for a failed batch.
  */
+const BATCH_UPLOAD_CHUNK_SIZE = 100;
+
 async function uploadBsos(collection, bsos) {
     const uid = authState.user?.id;
     if (!uid || bsos.length === 0) return;
 
-    // Encrypt each payload before sending to the server.
-    const encryptedBsos = encryptionKey
-        ? await Promise.all(bsos.map(async bso => ({
-            ...bso,
-            payload: await encryptPayload(bso.payload, encryptionKey),
-        })))
-        : bsos;
+    // Last-write-wins dedupe by id to avoid duplicate conflict keys in one batch.
+    const dedupedBsos = Array.from(new Map(bsos.map(bso => [bso.id, bso])).values());
 
-    await fetch(`${authState.serverUrl}/api/ext/storage/${collection}`, {
-        method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(encryptedBsos),
-    });
+    // Upload in chunks to respect the server's per-request batch limit.
+    for (let i = 0; i < dedupedBsos.length; i += BATCH_UPLOAD_CHUNK_SIZE) {
+        const rawChunk = dedupedBsos.slice(i, i + BATCH_UPLOAD_CHUNK_SIZE);
+        // Encrypt chunk-by-chunk to avoid long blocking CPU/memory spikes.
+        const chunk = encryptionKey
+            ? await Promise.all(rawChunk.map(async bso => ({
+                ...bso,
+                payload: await encryptPayload(bso.payload, encryptionKey),
+            })))
+            : rawChunk;
+        const response = await fetch(`${authState.serverUrl}/api/ext/storage/${collection}`, {
+            method: 'POST',
+            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(chunk),
+        });
+        if (!response.ok) {
+            const errBody = await response.json().catch(() => null);
+            throw new Error(
+                `Upload to '${collection}' failed (HTTP ${response.status}): ${
+                    errBody?.message ?? 'unknown error'
+                }`
+            );
+        }
+    }
 }
 
 // ─── Device Pairing ─────────────────────────────────────────────────────

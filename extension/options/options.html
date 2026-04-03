@@ -105,6 +105,52 @@
                 </div>
             </section>
 
+            <!-- Passwords -->
+            <section class="card" id="passwords-section">
+                <div class="card-header">
+                    <h2>🔒 Passwords</h2>
+                    <p>Your credentials are encrypted with AES-GCM-256 before being stored on the server.</p>
+                </div>
+                <div class="card-body">
+                    <!-- Add / Edit form -->
+                    <div id="password-form-container" class="password-form-container">
+                        <h3 id="password-form-title" class="form-section-title">Add New Credential</h3>
+                        <input type="hidden" id="password-edit-id">
+                        <div class="pw-form-grid">
+                            <div class="field">
+                                <label for="pw-site">Website</label>
+                                <input type="url" id="pw-site" placeholder="https://example.com" autocomplete="off">
+                            </div>
+                            <div class="field">
+                                <label for="pw-username">Username / Email</label>
+                                <input type="text" id="pw-username" placeholder="user@example.com" autocomplete="off">
+                            </div>
+                            <div class="field">
+                                <label for="pw-password">Password</label>
+                                <div class="pw-input-wrap">
+                                    <input type="password" id="pw-password" placeholder="••••••••" autocomplete="new-password">
+                                    <button type="button" id="pw-toggle-visibility" class="btn btn-sm btn-secondary" title="Show/hide">👁</button>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label for="pw-notes">Notes <span style="font-weight:400;color:#9ca3af">(optional)</span></label>
+                                <input type="text" id="pw-notes" placeholder="e.g. Work account" autocomplete="off">
+                            </div>
+                        </div>
+                        <div id="password-form-error" class="error hidden"></div>
+                        <div class="pw-form-actions">
+                            <button id="pw-save-btn" class="btn btn-primary">Save</button>
+                            <button id="pw-cancel-btn" class="btn btn-secondary hidden">Cancel</button>
+                        </div>
+                    </div>
+
+                    <!-- List -->
+                    <div id="passwords-list" class="passwords-list">
+                        <div class="empty-state">Loading…</div>
+                    </div>
+                </div>
+            </section>
+
             <!-- Server Configuration -->
             <section class="card">
                 <div class="card-header">
