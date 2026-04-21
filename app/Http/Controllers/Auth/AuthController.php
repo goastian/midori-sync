@@ -8,8 +8,10 @@ use App\Services\SyncAuthService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Laravel\Socialite\Facades\Socialite;
+use Laravel\Socialite\Two\InvalidStateException;
 
 class AuthController extends Controller
 {
@@ -28,7 +30,14 @@ class AuthController extends Controller
         }
 
         // Normal web OAuth flow
-        $socialiteUser = Socialite::driver('authentik')->user();
+        try {
+            $socialiteUser = Socialite::driver('authentik')->user();
+        } catch (InvalidStateException $e) {
+            Log::warning('OAuth state mismatch; restarting flow', [
+                'ip' => $request->ip(),
+            ]);
+            return redirect()->route('auth.redirect');
+        }
 
         $user = User::updateOrCreate(
             ['authentik_id' => $socialiteUser->getId()],
@@ -81,7 +90,12 @@ class AuthController extends Controller
 
         // Create a sync session token
         $authService = app(SyncAuthService::class);
-        $tokenData = $authService->createSessionToken($user, $device->id);
+        $tokenData = $authService->createSessionToken(
+            $user,
+            $device->id,
+            request()->ip(),
+            request()->userAgent(),
+        );
 
         // Store the result for the extension to poll
         Cache::put("ext_auth:{$state}", [
