@@ -1,80 +1,98 @@
 <?php
 
-use App\Http\Controllers\Api\ExtensionAuthController;
-use App\Http\Controllers\Api\ExtensionSyncController;
-use App\Http\Controllers\Api\SyncStorageController;
-use App\Http\Controllers\Api\TokenServerController;
-use App\Http\Middleware\ExtensionCors;
-use App\Http\Middleware\HawkAuthentication;
+use App\Http\Controllers\Api\Ext\ExtAuthController;
+use App\Http\Controllers\Api\Ext\ExtPairingController;
+use App\Http\Controllers\Api\Ext\ExtStorageController;
+use App\Http\Controllers\Api\V1\AuthTokenController;
+use App\Http\Controllers\Api\V1\CollectionController;
+use App\Http\Controllers\Api\V1\CryptoKeyController;
+use App\Http\Controllers\Api\V1\DeviceController;
+use App\Http\Controllers\Api\V1\SyncInfoController;
+use App\Http\Middleware\CorsForExtension;
+use App\Http\Middleware\EnforceQuota;
+use App\Http\Middleware\TrackDevice;
+use App\Http\Middleware\ValidateSyncToken;
 use Illuminate\Support\Facades\Route;
 
-/*
-|--------------------------------------------------------------------------
-| Firefox Sync 1.5 Compatible API Routes
-|--------------------------------------------------------------------------
-|
-| TokenServer: Exchanges Authentik Bearer tokens for Hawk credentials.
-| Sync Storage: Stores/retrieves encrypted BSOs using Hawk authentication.
-|
-*/
+// ─── Extension API ──────────────────────────────────────────────────────
+// Dedicated endpoints for the browser extension with simplified data formats.
+Route::prefix('ext')->middleware(CorsForExtension::class)->group(function () {
 
-// TokenServer endpoint — accepts Authentik Bearer token, returns Hawk credentials
-Route::middleware('throttle:10,1')->get('/1.0/sync/1.5', [TokenServerController::class, 'getToken']);
+    // Auth (unauthenticated — extension OAuth flow)
+    Route::get('/auth/start', [ExtAuthController::class, 'start']);
+    Route::get('/auth/poll', [ExtAuthController::class, 'poll']);
 
-// Heartbeat endpoint for health checks
-Route::get('/__heartbeat__', fn () => response()->json(['status' => 'ok']));
-Route::get('/__lbheartbeat__', fn () => response()->json(null, 200));
+    // Pairing redeem (unauthenticated — uses pairing token)
+    Route::post('/pair/redeem', [ExtPairingController::class, 'redeem']);
 
-/*
-|--------------------------------------------------------------------------
-| Extension API Routes
-|--------------------------------------------------------------------------
-|
-| Authentication and device management endpoints for the Midori Sync
-| browser extension. Uses Bearer token auth (api_token).
-|
-*/
+    // Authenticated extension endpoints
+    Route::middleware([ValidateSyncToken::class, TrackDevice::class])->group(function () {
 
-Route::prefix('ext')->middleware(ExtensionCors::class)->group(function () {
-    // OAuth2 Authorization Code flow for extension
-    // (callback is a web route at /ext/auth/callback — see routes/web.php)
-    Route::middleware('throttle:5,1')->group(function () {
-        Route::get('/auth/start', [ExtensionAuthController::class, 'authStart']);
-        Route::get('/auth/poll', [ExtensionAuthController::class, 'authPoll']);
-        Route::post('/logout', [ExtensionAuthController::class, 'logout']);
-    });
+        // Logout
+        Route::post('/logout', [AuthTokenController::class, 'destroy']);
 
-    Route::get('/profile', [ExtensionAuthController::class, 'profile']);
-    Route::post('/pair', [ExtensionAuthController::class, 'generatePairingToken']);
-    Route::post('/pair/redeem', [ExtensionAuthController::class, 'redeemPairingToken']);
-    Route::post('/sync/status', [ExtensionAuthController::class, 'updateSyncStatus']);
+        // Profile
+        Route::get('/profile', function (\Illuminate\Http\Request $request) {
+            $user = $request->user();
+            return response()->json([
+                'id' => $user->id,
+                'email' => $user->email,
+                'name' => $user->name,
+                'avatar_url' => $user->avatar_url,
+                'storage_quota_bytes' => $user->storage_quota_bytes,
+            ]);
+        });
 
-    // Simplified sync storage (Bearer token auth)
-    Route::middleware('throttle:60,1')->group(function () {
-        Route::get('/storage/info', [ExtensionSyncController::class, 'getInfo']);
-        Route::get('/storage/{collection}', [ExtensionSyncController::class, 'getCollection']);
-        Route::post('/storage/{collection}', [ExtensionSyncController::class, 'postCollection']);
-        Route::delete('/storage/{collection}', [ExtensionSyncController::class, 'deleteCollection']);
+        // Sync status (accepts GET and POST)
+        Route::match(['get', 'post'], '/sync/status', [SyncInfoController::class, 'status']);
+
+        // Storage info
+        Route::get('/storage/info', [SyncInfoController::class, 'info']);
+
+        // Device pairing (generate token)
+        Route::post('/pair', [ExtPairingController::class, 'generate']);
+
+        // Storage (flat BSO array format)
+        Route::middleware(EnforceQuota::class)->group(function () {
+            Route::get('/storage/{collection}', [ExtStorageController::class, 'index']);
+            Route::post('/storage/{collection}', [ExtStorageController::class, 'store']);
+        });
     });
 });
 
-// Sync Storage 1.5 API — protected by Hawk authentication
-Route::prefix('1.5/{uid}')->middleware(HawkAuthentication::class)->group(function () {
-    // Info endpoints
-    Route::get('/info/collections', [SyncStorageController::class, 'getCollections']);
-    Route::get('/info/quota', [SyncStorageController::class, 'getQuota']);
-    Route::get('/info/collection_usage', [SyncStorageController::class, 'getCollectionUsage']);
-    Route::get('/info/collection_counts', [SyncStorageController::class, 'getCollectionCounts']);
-    Route::get('/info/configuration', [SyncStorageController::class, 'getConfiguration']);
+// ─── API v1 — Midori Sync Protocol ─────────────────────────────────────
+Route::prefix('v1')->middleware(CorsForExtension::class)->group(function () {
 
-    // Storage endpoints
-    Route::get('/storage/{collection}', [SyncStorageController::class, 'getBsos']);
-    Route::get('/storage/{collection}/{id}', [SyncStorageController::class, 'getBso']);
-    Route::put('/storage/{collection}/{id}', [SyncStorageController::class, 'putBso']);
-    Route::post('/storage/{collection}', [SyncStorageController::class, 'postBsos']);
-    Route::delete('/storage/{collection}', [SyncStorageController::class, 'deleteCollection']);
-    Route::delete('/storage/{collection}/{id}', [SyncStorageController::class, 'deleteBso']);
+    // Auth: exchange OAuth token for sync session token
+    Route::post('/auth/token', [AuthTokenController::class, 'store']);
 
-    // Delete all user data
-    Route::delete('/', [SyncStorageController::class, 'deleteAll']);
+    // Authenticated sync endpoints
+    Route::middleware([ValidateSyncToken::class, TrackDevice::class])->group(function () {
+
+        // Auth
+        Route::delete('/auth/token', [AuthTokenController::class, 'destroy']);
+
+        // Sync info
+        Route::get('/sync/info', [SyncInfoController::class, 'info']);
+        Route::get('/sync/status', [SyncInfoController::class, 'status']);
+
+        // Collections & Records
+        Route::middleware(EnforceQuota::class)->group(function () {
+            Route::get('/collections/{name}', [CollectionController::class, 'index']);
+            Route::get('/collections/{name}/{id}', [CollectionController::class, 'show']);
+            Route::put('/collections/{name}/{id}', [CollectionController::class, 'upsert']);
+            Route::post('/collections/{name}', [CollectionController::class, 'batchUpsert']);
+            Route::delete('/collections/{name}/{id}', [CollectionController::class, 'destroyRecord']);
+            Route::delete('/collections/{name}', [CollectionController::class, 'destroyCollection']);
+        });
+
+        // Devices
+        Route::get('/devices', [DeviceController::class, 'index']);
+        Route::put('/devices/{id}', [DeviceController::class, 'upsert']);
+        Route::delete('/devices/{id}', [DeviceController::class, 'destroy']);
+
+        // Crypto key bundle
+        Route::get('/crypto/keys', [CryptoKeyController::class, 'show']);
+        Route::post('/crypto/keys', [CryptoKeyController::class, 'store']);
+    });
 });
