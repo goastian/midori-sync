@@ -14,7 +14,6 @@ The repository already has a functional and usable foundation:
 
 There is also clear technical debt:
 
-- The extension keeps two sync engines running in parallel: `background.js` and `sync-engine.js`.
 - There are two API surfaces (`/api/ext` and `/api/v1`) with overlapping logic.
 - The collection seeder does not fully match the original project scope.
 - Test coverage and development documentation are still partial.
