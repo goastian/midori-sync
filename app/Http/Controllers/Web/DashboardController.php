@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\Web;
 
 use App\Http\Controllers\Controller;
+use App\Models\Record;
 use App\Services\SyncStorageService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 
 class DashboardController extends Controller
@@ -47,6 +49,41 @@ class DashboardController extends Controller
             ],
             'devices' => $devices,
             'recentActivity' => $recentActivity,
+            'activity7d' => $this->buildActivityHistogram($user->id),
         ]);
+    }
+
+    /**
+     * Build a 7-day activity histogram (today and the previous 6 days).
+     *
+     * @return array<int, array{date: string, label: string, count: int}>
+     */
+    private function buildActivityHistogram(int $userId): array
+    {
+        $tz = config('app.timezone', 'UTC');
+        $endOfToday = now($tz)->endOfDay();
+        $start = now($tz)->subDays(6)->startOfDay();
+
+        $rows = Record::where('user_id', $userId)
+            ->where('modified_at', '>=', $start->getTimestamp())
+            ->where('modified_at', '<=', $endOfToday->getTimestamp())
+            ->get(['modified_at'])
+            ->groupBy(function ($record) use ($tz) {
+                return \Carbon\Carbon::createFromTimestamp((float) $record->modified_at, $tz)->toDateString();
+            })
+            ->map->count();
+
+        $series = [];
+        for ($i = 6; $i >= 0; $i--) {
+            $day = now($tz)->subDays($i)->startOfDay();
+            $key = $day->toDateString();
+            $series[] = [
+                'date' => $key,
+                'label' => $day->format('D'),
+                'count' => (int) ($rows[$key] ?? 0),
+            ];
+        }
+
+        return $series;
     }
 }
