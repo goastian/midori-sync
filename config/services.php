@@ -47,6 +47,10 @@ return [
         'max_record_size' => env('SYNC_MAX_RECORD_SIZE', 262144),
         'default_quota' => env('SYNC_DEFAULT_QUOTA', 104857600),
         'rate_limit' => env('SYNC_RATE_LIMIT', 60),
+        'rate_limit_read' => env('SYNC_RATE_LIMIT_READ'),
+        'rate_limit_write' => env('SYNC_RATE_LIMIT_WRITE'),
+        'http_compression' => env('SYNC_HTTP_COMPRESSION', false),
+        'http_compression_min_bytes' => env('SYNC_HTTP_COMPRESSION_MIN_BYTES', 1024),
     ],
 
 ];
