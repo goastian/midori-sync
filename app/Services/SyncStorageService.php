@@ -127,63 +127,104 @@ class SyncStorageService
             throw new \InvalidArgumentException("Unknown collection: {$collectionName}");
         }
 
+        $maxSize = (int) config('services.sync.max_record_size', 262144);
+        $now = microtime(true);
+        $nowDt = now();
+
+        // First pass: validate, build rows preserving original indices.
         $results = [];
+        $validRows = [];
+        foreach ($records as $i => $data) {
+            $recordId = $data['id'] ?? null;
+            $payload = $data['payload'] ?? '';
 
-        DB::transaction(function () use ($userId, $collection, $records, &$results) {
-            $now = microtime(true);
-            $maxSize = (int) config('services.sync.max_record_size', 262144);
-
-            foreach ($records as $i => $data) {
-                $recordId = $data['id'] ?? null;
-                $payload = $data['payload'] ?? '';
-
-                if (!$recordId) {
-                    $results[] = ['index' => $i, 'error' => 'Missing record id'];
-                    continue;
-                }
-
-                if (strlen($payload) > $maxSize) {
-                    $results[] = ['index' => $i, 'error' => 'Payload too large'];
-                    continue;
-                }
-
-                $existing = Record::forUser($userId)
-                    ->inCollection($collection->id)
-                    ->where('record_id', $recordId)
-                    ->lockForUpdate()
-                    ->first();
-
-                $recordNow = $now + ($i * 0.000001); // Ensure unique timestamps
-
-                if ($existing) {
-                    $existing->update([
-                        'payload' => $payload,
-                        'version' => $existing->version + 1,
-                        'modified_at' => $recordNow,
-                        'deleted' => $data['deleted'] ?? false,
-                        'ttl' => $data['ttl'] ?? null,
-                    ]);
-                } else {
-                    Record::create([
-                        'id' => Str::uuid(),
-                        'user_id' => $userId,
-                        'collection_id' => $collection->id,
-                        'record_id' => $recordId,
-                        'version' => 1,
-                        'payload' => $payload,
-                        'modified_at' => $recordNow,
-                        'deleted' => $data['deleted'] ?? false,
-                        'ttl' => $data['ttl'] ?? null,
-                    ]);
-                }
-
-                $results[] = ['index' => $i, 'id' => $recordId, 'modified_at' => $recordNow];
+            if (!$recordId) {
+                $results[$i] = ['index' => $i, 'error' => 'Missing record id'];
+                continue;
             }
 
+            if (strlen($payload) > $maxSize) {
+                $results[$i] = ['index' => $i, 'error' => 'Payload too large'];
+                continue;
+            }
+
+            $recordNow = $now + ($i * 0.000001);
+            $ttl = $data['ttl'] ?? null;
+            $ttlValue = $ttl ? \Illuminate\Support\Carbon::parse($ttl)->toDateTimeString() : null;
+
+            $validRows[$i] = [
+                'id' => (string) Str::uuid(),
+                'user_id' => $userId,
+                'collection_id' => $collection->id,
+                'record_id' => $recordId,
+                'version' => 1,
+                'payload' => $payload,
+                'modified_at' => $recordNow,
+                'deleted' => !empty($data['deleted']) ? 1 : 0,
+                'ttl' => $ttlValue,
+                'created_at' => $nowDt->toDateTimeString(),
+                'updated_at' => $nowDt->toDateTimeString(),
+            ];
+
+            $results[$i] = ['index' => $i, 'id' => $recordId, 'modified_at' => $recordNow];
+        }
+
+        if (empty($validRows)) {
+            ksort($results);
+            return array_values($results);
+        }
+
+        DB::transaction(function () use ($userId, $collection, $validRows) {
+            $this->nativeUpsert(array_values($validRows));
             $this->updateCollectionStats($userId, $collection->id);
         });
 
-        return $results;
+        ksort($results);
+        return array_values($results);
+    }
+
+    /**
+     * Issue a single INSERT ... ON CONFLICT DO UPDATE statement for all
+     * rows. Works on PostgreSQL and on SQLite 3.24+ (both back the unique
+     * index `(user_id, collection_id, record_id)`). On conflict we bump
+     * `version` server-side via `records.version + 1`, something that
+     * Eloquent's `upsert()` helper cannot express.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     */
+    private function nativeUpsert(array $rows): void
+    {
+        if ($rows === []) {
+            return;
+        }
+
+        $columns = [
+            'id', 'user_id', 'collection_id', 'record_id', 'version',
+            'payload', 'modified_at', 'deleted', 'ttl',
+            'created_at', 'updated_at',
+        ];
+
+        $placeholderRow = '(' . implode(',', array_fill(0, count($columns), '?')) . ')';
+        $placeholders = implode(',', array_fill(0, count($rows), $placeholderRow));
+
+        $bindings = [];
+        foreach ($rows as $row) {
+            foreach ($columns as $col) {
+                $bindings[] = $row[$col];
+            }
+        }
+
+        $sql = "INSERT INTO records (" . implode(',', $columns) . ") "
+            . "VALUES {$placeholders} "
+            . "ON CONFLICT (user_id, collection_id, record_id) DO UPDATE SET "
+            . "payload = EXCLUDED.payload, "
+            . "version = records.version + 1, "
+            . "modified_at = EXCLUDED.modified_at, "
+            . "deleted = EXCLUDED.deleted, "
+            . "ttl = EXCLUDED.ttl, "
+            . "updated_at = EXCLUDED.updated_at";
+
+        DB::statement($sql, $bindings);
     }
 
     public function deleteRecord(int $userId, string $collectionName, string $recordId): bool
