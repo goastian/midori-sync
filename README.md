@@ -1,178 +1,181 @@
 # Midori Sync
 
-End-to-end encrypted browser synchronization service for the Midori browser. Compatible with the Firefox Sync 1.5 protocol, authenticated via Authentik SSO (OAuth2/OIDC).
+Self-hosted synchronization service for Midori and Firefox with end-to-end encryption, a Laravel backend, a browser extension, and a web dashboard to inspect devices, collections, and storage usage.
 
-## Features
+## Current Status
 
-- **End-to-end encryption** — Your data is encrypted client-side with a separate passphrase. The server never sees your decrypted data.
-- **Firefox Sync 1.5 compatible** — Works with the built-in sync engine of Firefox-based browsers.
-- **Authentik SSO** — Single Sign-On via OAuth2/OIDC with Authentik.
-- **Sync everything** — Bookmarks, passwords, open tabs, browsing history, form data, add-ons, and more.
-- **User dashboard** — Web panel to manage connected devices, view sync statistics, and configure settings.
-- **Self-hostable** — Deploy with Docker or install manually on your own infrastructure.
-- **PostgreSQL 18** — Robust, production-ready database backend.
+The repository already has a functional and usable foundation:
 
-## Tech Stack
+- Laravel 13 backend with `v1` sync API and `ext` API for the extension.
+- Web and extension authentication via Authentik using Socialite.
+- PostgreSQL persistence with Redis for cache/session/queue in Docker deployments.
+- Extension with popup, options, setup, crypto library with libsodium, and adapters for multiple collections.
+- Web dashboard with pages for dashboard, devices, collections, and settings.
 
-| Component | Technology |
-|-----------|-----------|
-| Backend | Laravel 12 (PHP 8.3+) |
-| Frontend | Vue 3 + Inertia.js + TailwindCSS |
-| Database | PostgreSQL 18 |
-| Auth | Authentik (OAuth2/OIDC via Socialite) |
-| Encryption | Client-side AES-256-GCM, PBKDF2 + HKDF key derivation |
-| API | Firefox Sync Storage 1.5 + custom TokenServer |
+There is also clear technical debt:
 
-## Quick Start with Docker
+- The extension keeps two sync engines running in parallel: `background.js` and `sync-engine.js`.
+- There are two API surfaces (`/api/ext` and `/api/v1`) with overlapping logic.
+- The collection seeder does not fully match the original project scope.
+- Test coverage and development documentation are still partial.
 
-```bash
-git clone https://github.com/user/midori-sync.git
-cd midori-sync
-cp .env.example .env
-# Edit .env with your Authentik and database credentials
-docker compose up -d
-docker compose exec app php artisan key:generate
-docker compose exec app php artisan migrate --force
+The updated status details and execution plan live in `docs/plan-status.md`.
+
+## Main Components
+
+### Backend
+
+- Laravel 13 with PHP 8.3+
+- REST API for sessions, records, devices, and crypto key bundles
+- `SyncAuthService` and `SyncStorageService` services
+- Middleware for quota checks, device tracking, CORS, and token validation
+- Scheduled commands for TTL cleanup and usage recalculation
+
+### Extension
+
+- Manifest V2 for Gecko/Firefox
+- Popup for login, sync status, and manual actions
+- Options page for server settings, collections, and seed phrase
+- Setup page to generate or recover the seed phrase
+- `midori-sync-crypto.js` library with Argon2id + XChaCha20-Poly1305
+
+### Web dashboard
+
+- Dashboard with basic metrics and recent activity
+- Connected device management
+- Navigation across synced collections
+- Settings for quota and server-side data deletion
+
+## Project Structure
+
+```text
+app/
+  Console/Commands/        Scheduled commands
+  Http/Controllers/        API, auth, and web controllers
+  Http/Middleware/         Token, quota, CORS, tracking
+  Http/Requests/           API v1 and ext Form Requests
+  Models/                  User, Device, Record, SyncSession, etc.
+  Services/                Core auth and storage logic
+database/
+  migrations/              Main sync schema
+  seeders/                 Collection seeder
+docs/                      API, architecture, encryption, deployment, plan
+extension/                 Browser extension
+resources/js/              Frontend Vue 3 + Inertia
+routes/                    web.php, api.php, console.php
+tests/                     PHPUnit y Vitest
 ```
 
-Visit `http://localhost:8000` to access the landing page.
+## Requirements
 
-## Manual Installation
+### For Docker
 
-### Prerequisites
+- Docker
+- Docker Compose
+- Authentik instance accessible from the application
 
-- PHP 8.3+ with extensions: `pdo_pgsql`, `pgsql`, `intl`, `zip`, `bcmath`, `mbstring`
+### For Local Development
+
+- PHP 8.3+
 - Composer 2+
-- Node.js 20+ and npm
-- PostgreSQL 18
+- Node.js 20+
+- PostgreSQL 17+
+- Redis 7+
 
-### Steps
+## Docker Quick Start
 
-```bash
-git clone https://github.com/user/midori-sync.git
-cd midori-sync
-chmod +x setup.sh
-./setup.sh
-```
-
-Or manually:
+1. Clone the repository and enter the directory.
+2. Create your environment file from `.env.example`.
+3. Configure at least `APP_URL`, `DB_*`, `AUTHENTIK_*`, and the sync values.
+4. Start the services.
+5. Generate the Laravel key and run migrations with seed data.
 
 ```bash
 cp .env.example .env
-# Edit .env with your credentials
-
-composer install
-php artisan key:generate
-npm ci && npm run build
-php artisan migrate --force
-php artisan serve
+docker compose up -d --build
+docker compose exec app php artisan key:generate
+docker compose exec app php artisan migrate --seed
 ```
 
-## Authentik Configuration
+By default, the container publishes the app on port `8000`, so the expected local URL is:
 
-Create an OAuth2/OpenID provider in your Authentik instance:
+```text
+http://localhost:8000
+```
 
-1. Go to **Applications → Providers → Create**
-2. Select **OAuth2/OpenID Provider**
-3. Configure:
-   - **Name:** Midori Sync
-   - **Authorization flow:** default-provider-authorization-implicit-consent
-   - **Client type:** Confidential
-   - **Client ID:** (copy to `AUTHENTIK_CLIENT_ID` in `.env`)
-   - **Client Secret:** (copy to `AUTHENTIK_CLIENT_SECRET` in `.env`)
-   - **Redirect URIs:** `http://your-domain:8000/auth/authentik/callback`
-   - **Scopes:** `openid`, `profile`, `email`
-4. Create an **Application** linked to this provider
-5. Update your `.env`:
+## Local Development
+
+```bash
+composer install
+npm install
+cp .env.example .env
+php artisan key:generate
+php artisan migrate --seed
+composer run dev
+```
+
+`composer run dev` starts the Laravel server, queue worker, logs, and Vite in parallel.
+
+## Relevant Environment Variables
 
 ```env
-AUTHENTIK_BASE_URL=https://your-authentik-instance.example.com
-AUTHENTIK_CLIENT_ID=your-client-id
-AUTHENTIK_CLIENT_SECRET=your-client-secret
-AUTHENTIK_REDIRECT_URI=http://your-domain:8000/auth/authentik/callback
+APP_URL=http://localhost:8000
+
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=midori_sync
+DB_USERNAME=midori
+DB_PASSWORD=secret
+
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+
+AUTHENTIK_CLIENT_ID=
+AUTHENTIK_CLIENT_SECRET=
+AUTHENTIK_BASE_URL=https://auth.example.com
+AUTHENTIK_REDIRECT_URI=${APP_URL}/auth/callback
+
+SYNC_TOKEN_TTL=3600
+SYNC_MAX_RECORD_SIZE=262144
+SYNC_DEFAULT_QUOTA=104857600
+SYNC_RATE_LIMIT=60
 ```
 
-## Browser Configuration
+## Useful Commands
 
-To connect your Midori browser to this sync server:
+```bash
+# backend tests
+composer test
 
-1. Open `about:config` in the address bar
-2. Set `identity.sync.tokenserver.uri` to:
-   ```
-   http://your-domain:8000/api/1.0/sync/1.5
-   ```
-3. Restart the browser
-4. Sign in via the Sync option — you'll be redirected to Authentik
-5. Set your encryption passphrase when prompted
+# current JS tests
+npx vitest run tests/crypto.test.js
 
-> **Important:** The encryption passphrase is separate from your Authentik login. It encrypts your data locally and is never sent to the server. If you lose it, your synced data cannot be recovered.
+# cleanup TTL records and expired sessions
+php artisan sync:cleanup-expired
 
-## API Endpoints
+# recalculate usage for all users
+php artisan sync:recalculate-usage
 
-### TokenServer
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/1.0/sync/1.5` | Exchange Authentik Bearer token for Hawk credentials |
-
-### Sync Storage 1.5
-
-All storage endpoints require Hawk authentication (obtained from TokenServer).
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/1.5/{uid}/info/collections` | Collection timestamps |
-| GET | `/api/1.5/{uid}/info/quota` | Storage quota |
-| GET | `/api/1.5/{uid}/info/collection_usage` | Usage per collection |
-| GET | `/api/1.5/{uid}/info/collection_counts` | Item counts per collection |
-| GET | `/api/1.5/{uid}/storage/{collection}` | List BSOs |
-| GET | `/api/1.5/{uid}/storage/{collection}/{id}` | Get single BSO |
-| PUT | `/api/1.5/{uid}/storage/{collection}/{id}` | Create/update BSO |
-| POST | `/api/1.5/{uid}/storage/{collection}` | Batch upload BSOs |
-| DELETE | `/api/1.5/{uid}/storage/{collection}` | Delete collection |
-| DELETE | `/api/1.5/{uid}/storage/{collection}/{id}` | Delete BSO |
-| DELETE | `/api/1.5/{uid}` | Delete all user data |
-
-### Health Checks
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/__heartbeat__` | Application health check |
-| GET | `/api/__lbheartbeat__` | Load balancer health check |
-
-## Encryption Model
-
-```
-Passphrase (entered by user in browser)
-    │
-    ▼
-PBKDF2-SHA256 (600,000 rounds, salt = user_id)
-    │
-    ▼
-Master Key (256 bits)
-    │
-    ├── HKDF(info="midori-sync-encryption") → Encryption Key (AES-256-GCM)
-    └── HKDF(info="midori-sync-hmac")       → HMAC Key (verification)
-
-Each BSO is encrypted client-side before upload.
-The server stores only opaque encrypted blobs.
+# recalculate usage for a specific user
+php artisan sync:recalculate-usage --user=1
 ```
 
-## Environment Variables
+## Available Documentation
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `APP_URL` | Public URL of the application | `http://localhost:8000` |
-| `DB_CONNECTION` | Database driver | `pgsql` |
-| `DB_HOST` | PostgreSQL host | `127.0.0.1` |
-| `DB_DATABASE` | Database name | `midori_sync` |
-| `AUTHENTIK_BASE_URL` | Authentik instance URL | — |
-| `AUTHENTIK_CLIENT_ID` | OAuth2 client ID | — |
-| `AUTHENTIK_CLIENT_SECRET` | OAuth2 client secret | — |
-| `AUTHENTIK_REDIRECT_URI` | OAuth2 callback URL | — |
-| `SYNC_HAWK_TOKEN_DURATION` | Hawk token lifetime (seconds) | `3600` |
-| `SYNC_DEFAULT_QUOTA_BYTES` | Default storage quota per user | `104857600` (100MB) |
+- `docs/api.md`: current MSP API reference.
+- `docs/architecture.md`: technical architecture overview.
+- `docs/encryption.md`: encryption model and key hierarchy.
+- `docs/deployment.md`: Docker deployment guide.
+- `docs/plan-status.md`: updated audit and prioritized backlog.
+
+## Known Limitations
+
+- The extension is still not consolidated around a single sync engine.
+- Tests are still missing for adapters, middleware, `SyncAuthService`, and E2E flows.
+- Operational docs such as `protocol.md`, `extension-dev.md`, and `contributing.md` are still missing.
+- The dashboard still does not include an activity chart or device rename flow.
 
 ## License
 
-AGPL-3.0 — See [LICENSE](LICENSE) for details.
+This project is distributed under the MIT license. See `LICENSE` for the full text.
