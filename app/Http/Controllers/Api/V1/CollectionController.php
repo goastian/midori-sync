@@ -7,6 +7,7 @@ use App\Http\Requests\Api\V1\BatchUpsertRecordRequest;
 use App\Http\Requests\Api\V1\ListRecordsRequest;
 use App\Http\Requests\Api\V1\UpsertRecordRequest;
 use App\Services\SyncStorageService;
+use App\Support\Http\ConditionalResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -18,19 +19,53 @@ class CollectionController extends Controller
 
     public function index(ListRecordsRequest $request, string $name): JsonResponse
     {
+        $userId = $request->user()->id;
+        $since = $request->float('since');
+        $limit = $request->integer('limit') ?: null;
+        $sort = $request->input('sort', 'newest');
+        $includeDeleted = $request->boolean('include_deleted');
+
         $records = $this->storage->getRecords(
-            userId: $request->user()->id,
+            userId: $userId,
             collectionName: $name,
-            since: $request->float('since'),
-            limit: $request->integer('limit') ?: null,
-            sort: $request->input('sort', 'newest'),
-            includeDeleted: $request->boolean('include_deleted'),
+            since: $since,
+            limit: $limit,
+            sort: $sort,
+            includeDeleted: $includeDeleted,
         );
 
-        return response()->json([
+        $maxModified = 0.0;
+        foreach ($records as $r) {
+            if ($r['modified_at'] > $maxModified) {
+                $maxModified = (float) $r['modified_at'];
+            }
+        }
+
+        $etag = ConditionalResponse::etag(
+            'collection-index',
+            (string) $userId,
+            $name,
+            (string) $maxModified,
+            (string) count($records),
+            (string) ($since ?? ''),
+            (string) ($limit ?? ''),
+            $sort,
+            $includeDeleted ? '1' : '0',
+        );
+
+        if ($cached = ConditionalResponse::notModified($request, $etag, $maxModified ?: null)) {
+            return $cached;
+        }
+
+        $response = response()->json([
             'records' => $records,
             'count' => count($records),
-        ]);
+        ])->header('Cache-Control', 'private, must-revalidate');
+        $response->setEtag(trim($etag, '"'));
+        if ($maxModified > 0 && ($httpDate = ConditionalResponse::httpDate($maxModified))) {
+            $response->header('Last-Modified', $httpDate);
+        }
+        return $response;
     }
 
     public function show(Request $request, string $name, string $id): JsonResponse
