@@ -36,23 +36,17 @@ return [
     ],
 
     'authentik' => [
-        'base_url' => env('AUTHENTIK_BASE_URL'),
         'client_id' => env('AUTHENTIK_CLIENT_ID'),
         'client_secret' => env('AUTHENTIK_CLIENT_SECRET'),
+        'base_url' => env('AUTHENTIK_BASE_URL'),
         'redirect' => env('AUTHENTIK_REDIRECT_URI'),
     ],
 
     'sync' => [
-        'hawk_token_duration' => env('SYNC_HAWK_TOKEN_DURATION', 3600),
-        'hawk_clock_skew_seconds' => env('SYNC_HAWK_CLOCK_SKEW_SECONDS', 60),
-        'default_quota_bytes' => env('SYNC_DEFAULT_QUOTA_BYTES', 104857600),
-        'extension_cors_origins' => env('EXTENSION_CORS_ORIGINS', 'moz-extension://*,chrome-extension://*'),
-    ],
-
-    'sentry' => [
-        'dsn' => env('SENTRY_DSN'),
-        'traces_sample_rate' => env('SENTRY_TRACES_SAMPLE_RATE', 0.0),
-        'environment' => env('SENTRY_ENVIRONMENT', env('APP_ENV', 'production')),
+        'token_ttl' => env('SYNC_TOKEN_TTL', 3600),
+        'max_record_size' => env('SYNC_MAX_RECORD_SIZE', 262144),
+        'default_quota' => env('SYNC_DEFAULT_QUOTA', 104857600),
+        'rate_limit' => env('SYNC_RATE_LIMIT', 60),
     ],
 
 ];

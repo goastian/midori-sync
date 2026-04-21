@@ -2,429 +2,338 @@
 
 namespace App\Services;
 
-use App\Models\Bso;
 use App\Models\Collection;
-use App\Models\User;
+use App\Models\Record;
 use App\Models\UserCollection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
-/**
- * Core Sync Storage service implementing the Firefox Sync 1.5 storage logic.
- *
- * All data stored is encrypted client-side (E2E encryption).
- * The server only stores opaque encrypted blobs.
- *
- * @see https://mozilla-services.readthedocs.io/en/latest/storage/apis-1.5.html
- */
 class SyncStorageService
 {
-    /**
-     * Get the current server timestamp with millisecond precision.
-     */
-    public function getTimestamp(): float
-    {
-        return round(microtime(true), 2);
-    }
-
-    /**
-     * Get timestamps for all collections that have been modified.
-     *
-     * @return array<string, float>
-     */
-    public function getCollectionTimestamps(User $user): array
-    {
-        $results = UserCollection::where('user_id', $user->id)
-            ->join('collections', 'user_collections.collection_id', '=', 'collections.id')
-            ->pluck('user_collections.modified', 'collections.name');
-
-        return $results->toArray();
-    }
-
-    /**
-     * Get item counts per collection for a user.
-     *
-     * @return array<string, int>
-     */
-    public function getCollectionCounts(User $user): array
-    {
-        return Bso::where('bso.user_id', $user->id)
-            ->join('collections', 'bso.collection_id', '=', 'collections.id')
-            ->groupBy('collections.name')
-            ->selectRaw('collections.name, COUNT(*) as cnt')
-            ->pluck('cnt', 'collections.name')
-            ->toArray();
-    }
-
-    /**
-     * Get storage usage per collection in bytes.
-     *
-     * @return array<string, int>
-     */
-    public function getCollectionUsage(User $user): array
-    {
-        return Bso::where('bso.user_id', $user->id)
-            ->join('collections', 'bso.collection_id', '=', 'collections.id')
-            ->groupBy('collections.name')
-            ->selectRaw('collections.name, SUM(bso.payload_size) as usage')
-            ->pluck('usage', 'collections.name')
-            ->map(fn ($v) => (int) $v)
-            ->toArray();
-    }
-
-    /**
-     * Get quota information for a user.
-     *
-     * @return array{used: int, quota: int}
-     */
-    public function getQuota(User $user): array
-    {
-        $used = Bso::where('user_id', $user->id)->sum('payload_size');
-
-        return [
-            (int) $used,
-            $user->storage_quota_bytes,
-        ];
-    }
-
-    /**
-     * Resolve a collection name to its ID, creating it if needed.
-     */
-    public function resolveCollectionId(string $name): int
-    {
-        $collection = Collection::firstOrCreate(['name' => $name]);
-
-        return $collection->id;
-    }
-
-    /**
-     * Get BSOs from a collection with filtering and pagination.
-     *
-     * @param array<string, mixed> $params Filter parameters (ids, newer, older, sort, limit, offset, full)
-     * @return array{items: array<int, mixed>, offset: string|null}
-     */
-    public function getBsos(User $user, string $collectionName, array $params = []): array
-    {
-        $collection = Collection::where('name', $collectionName)->first();
+    public function getRecords(
+        int $userId,
+        string $collectionName,
+        ?float $since = null,
+        ?int $limit = null,
+        ?string $sort = 'newest',
+        bool $includeDeleted = false,
+    ): array {
+        $collection = Collection::findByName($collectionName);
         if (!$collection) {
-            return [
-                'items' => [],
-                'offset' => null,
-            ];
+            return [];
         }
 
-        $collectionId = $collection->id;
+        $query = Record::forUser($userId)->inCollection($collection->id);
 
-        $query = Bso::where('user_id', $user->id)
-            ->where('collection_id', $collectionId)
-            ->where(function ($q) {
-                $q->whereNull('expiry')->orWhere('expiry', '>', now());
-            });
-
-        // Filter by IDs
-        if (!empty($params['ids'])) {
-            $ids = is_array($params['ids']) ? $params['ids'] : explode(',', $params['ids']);
-            $query->whereIn('bso_id', $ids);
+        if ($since !== null) {
+            $query->modifiedSince($since);
         }
 
-        // Filter by newer than timestamp
-        if (isset($params['newer'])) {
-            $query->where('modified', '>', (float) $params['newer']);
+        if (!$includeDeleted) {
+            $query->active();
         }
 
-        // Filter by older than timestamp
-        if (isset($params['older'])) {
-            $query->where('modified', '<', (float) $params['older']);
+        $direction = $sort === 'oldest' ? 'asc' : 'desc';
+        $query->orderBy('modified_at', $direction);
+
+        if ($limit !== null) {
+            $query->limit($limit);
         }
 
-        // Sort order
-        $sort = $params['sort'] ?? 'newest';
-        match ($sort) {
-            'newest' => $query->orderBy('modified', 'desc'),
-            'oldest' => $query->orderBy('modified', 'asc'),
-            'index' => $query->orderBy('sortindex', 'desc'),
-            default => $query->orderBy('modified', 'desc'),
-        };
-
-        // Pagination
-        $limit = isset($params['limit']) ? min((int) $params['limit'], 1000) : 1000;
-        $offset = isset($params['offset']) ? (int) $params['offset'] : 0;
-
-        $query->offset($offset)->limit($limit + 1);
-
-        // Select fields
-        $full = filter_var($params['full'] ?? false, FILTER_VALIDATE_BOOLEAN);
-        if ($full) {
-            $items = $query->get()->map(fn (Bso $bso) => [
-                'id' => $bso->bso_id,
-                'modified' => $bso->modified,
-                'payload' => $bso->payload,
-                'sortindex' => $bso->sortindex,
-                'ttl' => $bso->ttl,
-            ])->toArray();
-        } else {
-            $items = $query->pluck('bso_id')->toArray();
-        }
-
-        // Check if there are more results
-        $nextOffset = null;
-        if (count($items) > $limit) {
-            array_pop($items);
-            $nextOffset = (string) ($offset + $limit);
-        }
-
-        return [
-            'items' => $items,
-            'offset' => $nextOffset,
-        ];
+        return $query->get()->map(fn (Record $r) => $this->formatRecord($r))->all();
     }
 
-    /**
-     * Get a single BSO by ID.
-     *
-     * @return array<string, mixed>|null
-     */
-    public function getBso(User $user, string $collectionName, string $bsoId): ?array
+    public function getRecord(int $userId, string $collectionName, string $recordId): ?array
     {
-        $collection = Collection::where('name', $collectionName)->first();
+        $collection = Collection::findByName($collectionName);
         if (!$collection) {
             return null;
         }
 
-        $collectionId = $collection->id;
-
-        $bso = Bso::where('user_id', $user->id)
-            ->where('collection_id', $collectionId)
-            ->where('bso_id', $bsoId)
-            ->where(function ($q) {
-                $q->whereNull('expiry')->orWhere('expiry', '>', now());
-            })
+        $record = Record::forUser($userId)
+            ->inCollection($collection->id)
+            ->where('record_id', $recordId)
             ->first();
 
-        if (!$bso) {
-            return null;
-        }
-
-        return [
-            'id' => $bso->bso_id,
-            'modified' => $bso->modified,
-            'sortindex' => $bso->sortindex,
-            'payload' => $bso->payload,
-        ];
+        return $record ? $this->formatRecord($record) : null;
     }
 
-    /**
-     * Store or update a single BSO.
-     *
-     * @param array<string, mixed> $data BSO data (payload, sortindex, ttl)
-     */
-    public function putBso(User $user, string $collectionName, string $bsoId, array $data): float
-    {
-        $collectionId = $this->resolveCollectionId($collectionName);
-        $now = $this->getTimestamp();
-
-        $bso = Bso::where('user_id', $user->id)
-            ->where('collection_id', $collectionId)
-            ->where('bso_id', $bsoId)
-            ->first();
-
-        $attributes = [
-            'user_id' => $user->id,
-            'collection_id' => $collectionId,
-            'bso_id' => $bsoId,
-            'modified' => $now,
-        ];
-
-        if (isset($data['payload'])) {
-            $attributes['payload'] = $data['payload'];
-            $attributes['payload_size'] = strlen($data['payload']);
+    public function upsertRecord(
+        int $userId,
+        string $collectionName,
+        string $recordId,
+        string $payload,
+        ?float $ifUnmodifiedSince = null,
+        ?string $ttl = null,
+    ): array {
+        $collection = Collection::findByName($collectionName);
+        if (!$collection) {
+            throw new \InvalidArgumentException("Unknown collection: {$collectionName}");
         }
 
-        if (isset($data['sortindex'])) {
-            $attributes['sortindex'] = (int) $data['sortindex'];
+        $maxSize = (int) config('services.sync.max_record_size', 262144);
+        if (strlen($payload) > $maxSize) {
+            throw new \OverflowException("Record payload exceeds maximum size of {$maxSize} bytes");
         }
 
-        if (isset($data['ttl'])) {
-            $attributes['ttl'] = (int) $data['ttl'];
-            $attributes['expiry'] = now()->addSeconds((int) $data['ttl']);
-        }
+        return DB::transaction(function () use ($userId, $collection, $recordId, $payload, $ifUnmodifiedSince, $ttl) {
+            $existing = Record::forUser($userId)
+                ->inCollection($collection->id)
+                ->where('record_id', $recordId)
+                ->lockForUpdate()
+                ->first();
 
-        if ($bso) {
-            $bso->update($attributes);
-        } else {
-            Bso::create($attributes);
-        }
-
-        // Update collection timestamp
-        UserCollection::updateOrCreate(
-            ['user_id' => $user->id, 'collection_id' => $collectionId],
-            ['modified' => $now],
-        );
-
-        Log::info('sync_put_bso', [
-            'user_id' => $user->id,
-            'collection' => $collectionName,
-            'bso_id' => $bsoId,
-            'modified' => $now,
-        ]);
-
-        return $now;
-    }
-
-    /**
-     * Batch upload BSOs to a collection.
-     *
-     * @param array<int, array<string, mixed>> $bsos Array of BSO data
-     * @return array{modified: float, success: list<string>, failed: array<string, list<string>>}
-     */
-    public function postBsos(User $user, string $collectionName, array $bsos): array
-    {
-        $maxPayloadBytes = 262144;
-        $maxRecords = 100;
-
-        if (count($bsos) > $maxRecords) {
-            throw new \InvalidArgumentException("Maximum {$maxRecords} records per request");
-        }
-
-        $collectionId = $this->resolveCollectionId($collectionName);
-        $now = $this->getTimestamp();
-        $upsertData = [];
-        $failed = [];
-
-        foreach ($bsos as $bsoData) {
-            $bsoId = $bsoData['id'] ?? null;
-
-            if (!$bsoId || strlen($bsoId) > 64) {
-                if ($bsoId) {
-                    $failed[$bsoId] = ['invalid id'];
+            if ($existing && $ifUnmodifiedSince !== null) {
+                if ((float) $existing->modified_at > $ifUnmodifiedSince) {
+                    throw new \RuntimeException('Conflict: record has been modified');
                 }
-                continue;
             }
 
-            $payload = (string) ($bsoData['payload'] ?? '');
-            if ($payload !== '' && strlen($payload) > $maxPayloadBytes) {
-                $failed[$bsoId] = ['payload size exceeded'];
-                continue;
+            $now = microtime(true);
+
+            if ($existing) {
+                $existing->update([
+                    'payload' => $payload,
+                    'version' => $existing->version + 1,
+                    'modified_at' => $now,
+                    'deleted' => false,
+                    'ttl' => $ttl,
+                ]);
+                $record = $existing->fresh();
+            } else {
+                $record = Record::create([
+                    'id' => Str::uuid(),
+                    'user_id' => $userId,
+                    'collection_id' => $collection->id,
+                    'record_id' => $recordId,
+                    'version' => 1,
+                    'payload' => $payload,
+                    'modified_at' => $now,
+                    'deleted' => false,
+                    'ttl' => $ttl,
+                ]);
             }
 
-            $ttl = isset($bsoData['ttl']) ? (int) $bsoData['ttl'] : null;
+            $this->updateCollectionStats($userId, $collection->id);
 
-            $upsertData[] = [
-                'user_id' => $user->id,
-                'collection_id' => $collectionId,
-                'bso_id' => $bsoId,
-                'payload' => $payload !== '' ? $payload : null,
-                'payload_size' => strlen($payload),
-                'modified' => $now,
-                'sortindex' => isset($bsoData['sortindex']) ? (int) $bsoData['sortindex'] : 0,
-                'ttl' => $ttl,
-                'expiry' => $ttl !== null ? now()->addSeconds($ttl) : null,
-            ];
+            return $this->formatRecord($record);
+        });
+    }
+
+    public function batchUpsert(int $userId, string $collectionName, array $records): array
+    {
+        $collection = Collection::findByName($collectionName);
+        if (!$collection) {
+            throw new \InvalidArgumentException("Unknown collection: {$collectionName}");
         }
 
-        DB::transaction(function () use ($user, $collectionId, $upsertData, $now) {
-            if (!empty($upsertData)) {
-                DB::table('bso')->upsert(
-                    $upsertData,
-                    ['user_id', 'collection_id', 'bso_id'],
-                    ['payload', 'payload_size', 'modified', 'sortindex', 'ttl', 'expiry'],
-                );
+        $results = [];
+
+        DB::transaction(function () use ($userId, $collection, $records, &$results) {
+            $now = microtime(true);
+            $maxSize = (int) config('services.sync.max_record_size', 262144);
+
+            foreach ($records as $i => $data) {
+                $recordId = $data['id'] ?? null;
+                $payload = $data['payload'] ?? '';
+
+                if (!$recordId) {
+                    $results[] = ['index' => $i, 'error' => 'Missing record id'];
+                    continue;
+                }
+
+                if (strlen($payload) > $maxSize) {
+                    $results[] = ['index' => $i, 'error' => 'Payload too large'];
+                    continue;
+                }
+
+                $existing = Record::forUser($userId)
+                    ->inCollection($collection->id)
+                    ->where('record_id', $recordId)
+                    ->lockForUpdate()
+                    ->first();
+
+                $recordNow = $now + ($i * 0.000001); // Ensure unique timestamps
+
+                if ($existing) {
+                    $existing->update([
+                        'payload' => $payload,
+                        'version' => $existing->version + 1,
+                        'modified_at' => $recordNow,
+                        'deleted' => $data['deleted'] ?? false,
+                        'ttl' => $data['ttl'] ?? null,
+                    ]);
+                } else {
+                    Record::create([
+                        'id' => Str::uuid(),
+                        'user_id' => $userId,
+                        'collection_id' => $collection->id,
+                        'record_id' => $recordId,
+                        'version' => 1,
+                        'payload' => $payload,
+                        'modified_at' => $recordNow,
+                        'deleted' => $data['deleted'] ?? false,
+                        'ttl' => $data['ttl'] ?? null,
+                    ]);
+                }
+
+                $results[] = ['index' => $i, 'id' => $recordId, 'modified_at' => $recordNow];
             }
 
-            // Update collection timestamp
-            UserCollection::updateOrCreate(
-                ['user_id' => $user->id, 'collection_id' => $collectionId],
-                ['modified' => $now],
-            );
+            $this->updateCollectionStats($userId, $collection->id);
         });
 
-        $success = array_column($upsertData, 'bso_id');
+        return $results;
+    }
 
-        Log::info('sync_post_bsos', [
-            'user_id' => $user->id,
-            'collection' => $collectionName,
-            'received_count' => count($bsos),
-            'success_count' => count($success),
-            'failed_count' => count($failed),
-            'modified' => $now,
-        ]);
+    public function deleteRecord(int $userId, string $collectionName, string $recordId): bool
+    {
+        $collection = Collection::findByName($collectionName);
+        if (!$collection) {
+            return false;
+        }
+
+        $deleted = Record::forUser($userId)
+            ->inCollection($collection->id)
+            ->where('record_id', $recordId)
+            ->update([
+                'deleted' => true,
+                'payload' => '',
+                'modified_at' => microtime(true),
+            ]);
+
+        if ($deleted) {
+            $this->updateCollectionStats($userId, $collection->id);
+        }
+
+        return $deleted > 0;
+    }
+
+    public function deleteCollection(int $userId, string $collectionName): int
+    {
+        $collection = Collection::findByName($collectionName);
+        if (!$collection) {
+            return 0;
+        }
+
+        $count = Record::forUser($userId)
+            ->inCollection($collection->id)
+            ->delete();
+
+        UserCollection::where('user_id', $userId)
+            ->where('collection_id', $collection->id)
+            ->delete();
+
+        return $count;
+    }
+
+    public function getSyncInfo(int $userId): array
+    {
+        $usage = Record::where('user_id', $userId)
+            ->where('deleted', false)
+            ->sum(DB::raw('LENGTH(payload)'));
+
+        $user = \App\Models\User::find($userId);
+        $lastModified = Record::where('user_id', $userId)->max('modified_at');
 
         return [
-            'modified' => $now,
-            'success' => $success,
-            'failed' => $failed,
+            'quota_bytes' => $user->storage_quota_bytes,
+            'used_bytes' => (int) $usage,
+            'last_modified' => $lastModified ? (float) $lastModified : null,
         ];
     }
 
-    /**
-     * Delete BSOs from a collection.
-     *
-     * @param array<string, mixed> $params Filter parameters (ids)
-     */
-    public function deleteBsos(User $user, string $collectionName, array $params = []): float
+    public function getCollectionStatus(int $userId): array
     {
-        $collectionId = $this->resolveCollectionId($collectionName);
-        $now = $this->getTimestamp();
+        return UserCollection::where('user_id', $userId)
+            ->join('collections', 'collections.id', '=', 'user_collections.collection_id')
+            ->select([
+                'collections.name',
+                'user_collections.last_modified',
+                'user_collections.record_count',
+                'user_collections.size_bytes',
+            ])
+            ->get()
+            ->keyBy('name')
+            ->map(fn ($uc) => [
+                'last_modified' => (float) $uc->last_modified,
+                'record_count' => $uc->record_count,
+                'size_bytes' => $uc->size_bytes,
+            ])
+            ->all();
+    }
 
-        $query = Bso::where('user_id', $user->id)
-            ->where('collection_id', $collectionId);
+    public function deleteAllUserData(int $userId): void
+    {
+        DB::transaction(function () use ($userId) {
+            Record::where('user_id', $userId)->delete();
+            UserCollection::where('user_id', $userId)->delete();
+            \App\Models\CryptoKeyBundle::where('user_id', $userId)->delete();
+        });
+    }
 
-        if (!empty($params['ids'])) {
-            $ids = is_array($params['ids']) ? $params['ids'] : explode(',', $params['ids']);
-            $query->whereIn('bso_id', $ids);
+    public function cleanupExpiredRecords(): int
+    {
+        return Record::whereNotNull('ttl')
+            ->where('ttl', '<=', now())
+            ->delete();
+    }
+
+    public function recalculateUsage(int $userId): void
+    {
+        $collections = Collection::all();
+
+        foreach ($collections as $collection) {
+            $stats = Record::where('user_id', $userId)
+                ->where('collection_id', $collection->id)
+                ->where('deleted', false)
+                ->selectRaw('COUNT(*) as record_count, COALESCE(SUM(LENGTH(payload)), 0) as size_bytes, MAX(modified_at) as last_modified')
+                ->first();
+
+            if ($stats->record_count > 0) {
+                UserCollection::updateOrCreate(
+                    ['user_id' => $userId, 'collection_id' => $collection->id],
+                    [
+                        'record_count' => $stats->record_count,
+                        'size_bytes' => $stats->size_bytes,
+                        'last_modified' => $stats->last_modified ?? 0,
+                    ]
+                );
+            } else {
+                UserCollection::where('user_id', $userId)
+                    ->where('collection_id', $collection->id)
+                    ->delete();
+            }
         }
-
-        $query->delete();
-
-        UserCollection::updateOrCreate(
-            ['user_id' => $user->id, 'collection_id' => $collectionId],
-            ['modified' => $now],
-        );
-
-        return $now;
     }
 
-    /**
-     * Delete a single BSO.
-     */
-    public function deleteBso(User $user, string $collectionName, string $bsoId): float
+    private function updateCollectionStats(int $userId, int $collectionId): void
     {
-        $collectionId = $this->resolveCollectionId($collectionName);
-        $now = $this->getTimestamp();
-
-        Bso::where('user_id', $user->id)
+        $stats = Record::where('user_id', $userId)
             ->where('collection_id', $collectionId)
-            ->where('bso_id', $bsoId)
-            ->delete();
+            ->where('deleted', false)
+            ->selectRaw('COUNT(*) as record_count, COALESCE(SUM(LENGTH(payload)), 0) as size_bytes, MAX(modified_at) as last_modified')
+            ->first();
 
         UserCollection::updateOrCreate(
-            ['user_id' => $user->id, 'collection_id' => $collectionId],
-            ['modified' => $now],
+            ['user_id' => $userId, 'collection_id' => $collectionId],
+            [
+                'record_count' => $stats->record_count ?? 0,
+                'size_bytes' => $stats->size_bytes ?? 0,
+                'last_modified' => $stats->last_modified ?? microtime(true),
+            ]
         );
-
-        return $now;
     }
 
-    /**
-     * Delete ALL sync data for a user.
-     */
-    public function deleteAllUserData(User $user): float
+    private function formatRecord(Record $record): array
     {
-        $now = $this->getTimestamp();
-
-        Bso::where('user_id', $user->id)->delete();
-        UserCollection::where('user_id', $user->id)->delete();
-
-        return $now;
-    }
-
-    /**
-     * Purge expired BSOs across all users.
-     */
-    public function purgeExpiredBsos(): int
-    {
-        return Bso::whereNotNull('expiry')
-            ->where('expiry', '<', now())
-            ->delete();
+        return [
+            'id' => $record->record_id,
+            'version' => $record->version,
+            'payload' => $record->payload,
+            'modified_at' => (float) $record->modified_at,
+            'ttl' => $record->ttl?->toIso8601String(),
+            'deleted' => $record->deleted,
+        ];
     }
 }

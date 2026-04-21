@@ -3,77 +3,64 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: midori-sync
-    restart: unless-stopped
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "${APP_PORT:-8000}:80"
     environment:
-      - APP_NAME=${APP_NAME:-Midori Sync}
       - APP_ENV=${APP_ENV:-production}
       - APP_KEY=${APP_KEY}
-      - APP_DEBUG=${APP_DEBUG:-false}
       - APP_URL=${APP_URL:-http://localhost:8000}
       - DB_CONNECTION=pgsql
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_DATABASE=${DB_DATABASE:-midori_sync}
       - DB_USERNAME=${DB_USERNAME:-midori}
-      - DB_PASSWORD=${DB_PASSWORD:-midori}
-      - SESSION_DRIVER=redis
-      - CACHE_STORE=redis
-      - QUEUE_CONNECTION=redis
+      - DB_PASSWORD=${DB_PASSWORD:-secret}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_DB=0
-      - REDIS_CACHE_DB=1
-      - REDIS_CACHE_CONNECTION=cache
-      - AUTHENTIK_BASE_URL=${AUTHENTIK_BASE_URL}
+      - CACHE_STORE=redis
+      - SESSION_DRIVER=redis
+      - QUEUE_CONNECTION=redis
       - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
       - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}
-      - AUTHENTIK_REDIRECT_URI=${AUTHENTIK_REDIRECT_URI}
-      - SYNC_HAWK_TOKEN_DURATION=${SYNC_HAWK_TOKEN_DURATION:-3600}
-      - SYNC_DEFAULT_QUOTA_BYTES=${SYNC_DEFAULT_QUOTA_BYTES:-104857600}
+      - AUTHENTIK_BASE_URL=${AUTHENTIK_BASE_URL}
+      - SYNC_TOKEN_TTL=${SYNC_TOKEN_TTL:-3600}
+    volumes:
+      - storage_data:/var/www/html/storage
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - app-storage:/var/www/html/storage
+    restart: unless-stopped
 
   postgres:
-    image: postgres:18-alpine
-    container_name: midori-sync-db
-    restart: unless-stopped
+    image: postgres:17-alpine
     environment:
       POSTGRES_DB: ${DB_DATABASE:-midori_sync}
       POSTGRES_USER: ${DB_USERNAME:-midori}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-midori}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "${DB_PORT_EXTERNAL:-5432}:5432"
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-midori} -d ${DB_DATABASE:-midori_sync}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    container_name: midori-sync-redis
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT_EXTERNAL:-6379}:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
-    volumes:
-      - redis-data:/data
+    restart: unless-stopped
 
 volumes:
-  postgres-data:
-  app-storage:
-  redis-data:
+  postgres_data:
+  redis_data:
+  storage_data:

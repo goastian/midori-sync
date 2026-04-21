@@ -3,23 +3,29 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
-/**
- * Sync collection type (bookmarks, history, tabs, passwords, etc.).
- */
 class Collection extends Model
 {
-    /**
-     * Indicates if the model should be timestamped.
-     */
     public $timestamps = false;
 
-    /**
-     * The attributes that are mass assignable.
-     *
-     * @var list<string>
-     */
     protected $fillable = [
         'name',
+        'description',
     ];
+
+    public function records(): HasMany
+    {
+        return $this->hasMany(Record::class);
+    }
+
+    public function userCollections(): HasMany
+    {
+        return $this->hasMany(UserCollection::class);
+    }
+
+    public static function findByName(string $name): ?self
+    {
+        return static::where('name', $name)->first();
+    }
 }
