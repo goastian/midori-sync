@@ -13,8 +13,11 @@ class TrackDevice
         $response = $next($request);
 
         $session = $request->get('sync_session');
-        if ($session && $session->device) {
-            $session->device->touchLastSync();
+        if ($session) {
+            if ($session->device) {
+                $session->device->touchLastSync();
+            }
+            $session->forceFill(['last_used_at' => now()])->save();
         }
 
         return $response;
