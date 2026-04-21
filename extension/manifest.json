@@ -22,7 +22,6 @@
             "lib/sodium.js",
             "lib/wordlist.js",
             "lib/midori-sync-crypto.js",
-            "background/sync-engine.js",
             "background/collection-adapters/bookmarks.js",
             "background/collection-adapters/history.js",
             "background/collection-adapters/open-tabs.js",
