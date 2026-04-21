@@ -17,6 +17,9 @@ class SyncSession extends Model
         'user_id',
         'device_id',
         'token_hash',
+        'ip_address',
+        'user_agent',
+        'last_used_at',
         'expires_at',
         'created_at',
     ];
@@ -26,6 +29,7 @@ class SyncSession extends Model
         return [
             'expires_at' => 'datetime',
             'created_at' => 'datetime',
+            'last_used_at' => 'datetime',
         ];
     }
 

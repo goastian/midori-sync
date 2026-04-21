@@ -62,7 +62,12 @@ class AuthTokenController extends Controller
             $deviceId = $device->id;
         }
 
-        $tokenData = $this->authService->createSessionToken($user, $deviceId);
+        $tokenData = $this->authService->createSessionToken(
+            $user,
+            $deviceId,
+            $request->ip(),
+            $request->userAgent(),
+        );
 
         return response()->json([
             'token' => $tokenData['token'],

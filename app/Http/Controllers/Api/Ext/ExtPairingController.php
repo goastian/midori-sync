@@ -60,7 +60,12 @@ class ExtPairingController extends Controller
             ]
         );
 
-        $tokenData = $this->authService->createSessionToken($user, $device->id);
+        $tokenData = $this->authService->createSessionToken(
+            $user,
+            $device->id,
+            $request->ip(),
+            $request->userAgent(),
+        );
 
         return response()->json([
             'token' => $tokenData['token'],
