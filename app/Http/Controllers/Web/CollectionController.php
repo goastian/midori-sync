@@ -85,6 +85,40 @@ class CollectionController extends Controller
         return redirect('/collections');
     }
 
+    public function export(Request $request, string $name)
+    {
+        $user = $request->user();
+        $collection = Collection::findByName($name);
+
+        if (!$collection) {
+            abort(404);
+        }
+
+        $records = $this->storage->getRecords(
+            userId: $user->id,
+            collectionName: $name,
+            sort: 'newest',
+        );
+
+        $payload = [
+            'exported_at' => now()->toIso8601String(),
+            'user_id' => $user->id,
+            'collection' => $collection->name,
+            'record_count' => count($records),
+            'records' => $records,
+        ];
+
+        $filename = sprintf(
+            'midori-%s-%s.json',
+            $collection->name,
+            now()->format('Ymd-His'),
+        );
+
+        return response()->json($payload, 200, [
+            'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+        ], JSON_PRETTY_PRINT);
+    }
+
     private function formatBytes(int $bytes): string
     {
         $units = ['B', 'KB', 'MB', 'GB'];
