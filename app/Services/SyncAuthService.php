@@ -8,7 +8,7 @@ use Illuminate\Support\Str;
 
 class SyncAuthService
 {
-    public function createSessionToken(User $user, ?int $deviceId = null): array
+    public function createSessionToken(User $user, ?int $deviceId = null, ?string $ipAddress = null, ?string $userAgent = null): array
     {
         $token = Str::random(64);
         $tokenHash = hash('sha256', $token);
@@ -18,6 +18,8 @@ class SyncAuthService
             'user_id' => $user->id,
             'device_id' => $deviceId,
             'token_hash' => $tokenHash,
+            'ip_address' => $ipAddress,
+            'user_agent' => $userAgent ? substr($userAgent, 0, 512) : null,
             'expires_at' => now()->addSeconds($ttl),
             'created_at' => now(),
         ]);
