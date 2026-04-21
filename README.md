@@ -178,4 +178,4 @@ php artisan sync:recalculate-usage --user=1
 
 ## License
 
-This project is distributed under the MIT license. See `LICENSE` for the full text.
+This project is distributed under the AGPL license. See `LICENSE` for the full text.
