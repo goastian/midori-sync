@@ -30,4 +30,18 @@ class DeviceController extends Controller
 
         return redirect()->back();
     }
+
+    public function update(Request $request, string $deviceId)
+    {
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'min:1', 'max:100'],
+        ]);
+
+        $request->user()
+            ->devices()
+            ->where('device_id', $deviceId)
+            ->update(['name' => $validated['name']]);
+
+        return redirect()->back();
+    }
 }
