@@ -14,6 +14,7 @@ class Device extends Model
         'type',
         'os',
         'browser_version',
+        'last_sync_at',
     ];
 
     protected function casts(): array
