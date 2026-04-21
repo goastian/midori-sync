@@ -2,7 +2,6 @@
  * Midori Sync Extension — Popup Script
  *
  * Handles UI interactions for login, sync status, and navigation.
- * Phase 1.5: Enhanced UX with spinners, toasts, inline validation, and status panel.
  */
 
 const SYNC_ICONS = {
@@ -204,6 +203,13 @@ function setupEventListeners() {
 
             if (result.error) throw new Error(result.error);
 
+            // If first login and no encryption key, open seed phrase setup
+            if (result.needsKeySetup) {
+                browser.tabs.create({ url: browser.runtime.getURL('setup/setup.html') });
+                window.close();
+                return;
+            }
+
             showToast('✓ Logged in successfully!', 2000, 'success');
             const state = await sendMessage('getState');
             showMainView(state);
@@ -294,9 +300,10 @@ function setupEventListeners() {
         }
     });
 
-    // Settings button
+    // Settings button — opens settings in a full new tab
     document.getElementById('open-settings').addEventListener('click', () => {
-        browser.runtime.openOptionsPage();
+        browser.tabs.create({ url: browser.runtime.getURL('options/options.html') });
+        window.close();
     });
 
     // Logout button

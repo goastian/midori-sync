@@ -1,3 +1,229 @@
+:root {
+    --color-bg: #ffffff;
+    --color-surface: #f9fafb;
+    --color-border: #e5e7eb;
+    --color-text: #111827;
+    --color-text-secondary: #6b7280;
+    --color-primary: #2563eb;
+    --color-primary-hover: #1d4ed8;
+    --color-success: #10b981;
+    --color-error: #ef4444;
+    --font: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: var(--font);
+    font-size: 13px;
+    color: var(--color-text);
+    background: var(--color-bg);
+    width: 320px;
+    min-height: 200px;
+}
+
+.popup {
+    padding: 0;
+}
+
+/* Header */
+.popup-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--color-primary);
+}
+
+/* States */
+.state {
+    padding: 20px 16px;
+}
+
+.state.hidden {
+    display: none;
+}
+
+.state-icon {
+    text-align: center;
+    margin-bottom: 12px;
+}
+
+.state-text {
+    text-align: center;
+    color: var(--color-text-secondary);
+    font-size: 13px;
+    margin-bottom: 16px;
+}
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.btn-primary {
+    background: var(--color-primary);
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: var(--color-primary-hover);
+}
+
+.btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-full {
+    width: 100%;
+}
+
+.btn-link {
+    background: none;
+    border: none;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+}
+
+.btn-link:hover {
+    color: var(--color-primary);
+}
+
+/* Status */
+.sync-status {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+}
+
+.status-row + .status-row {
+    border-top: 1px solid var(--color-border);
+    margin-top: 4px;
+    padding-top: 8px;
+}
+
+.status-label {
+    color: var(--color-text-secondary);
+    font-size: 12px;
+}
+
+.status-value {
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.status-ok {
+    color: var(--color-success);
+}
+
+.status-error {
+    color: var(--color-error);
+}
+
+/* Collections summary */
+.collections-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 16px;
+}
+
+.collection-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--color-text-secondary);
+}
+
+.collection-tag .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-success);
+}
+
+/* Actions */
+.actions {
+    margin-bottom: 12px;
+}
+
+/* Footer */
+.popup-footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-border);
+}
+
+.separator {
+    color: var(--color-border);
+}
+
+/* Spinner */
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--color-border);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    margin: 0 auto 12px;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Error */
+.error-detail {
+    text-align: center;
+    color: var(--color-error);
+    font-size: 11px;
+    margin-bottom: 12px;
+    word-break: break-word;
+}
 /* Midori Sync Extension — Popup Styles */
 
 * {

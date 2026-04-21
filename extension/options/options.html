@@ -7,191 +7,118 @@
     <link rel="stylesheet" href="options.css">
 </head>
 <body>
-    <div class="container">
-        <!-- Header -->
+    <div class="options">
         <header class="header">
-            <div class="header-inner">
-                <div class="brand">
-                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    <h1>Midori Sync Settings</h1>
-                </div>
-                <div class="user-badge" id="user-badge">
-                    <span id="badge-name">Not signed in</span>
-                </div>
-            </div>
+            <h1>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                </svg>
+                Midori Sync Settings
+            </h1>
         </header>
 
-        <main class="main">
-            <!-- Not logged in message -->
-            <div id="not-logged-in" class="card hidden">
-                <div class="empty-state">
-                    <p>You are not signed in. Open the Midori Sync popup to sign in first.</p>
+        <!-- Not logged in -->
+        <section id="section-login" class="section hidden">
+            <div class="card">
+                <p class="card-desc">You need to sign in first. Use the Midori Sync popup to sign in with your Astian account.</p>
+            </div>
+        </section>
+
+        <!-- Settings (logged in) -->
+        <section id="section-settings" class="section hidden">
+            <!-- Account info -->
+            <div class="card">
+                <h3>Account</h3>
+                <div class="info-row">
+                    <span class="info-label">Name</span>
+                    <span id="info-name" class="info-value"></span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Email</span>
+                    <span id="info-email" class="info-value"></span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Device</span>
+                    <span id="info-device" class="info-value"></span>
                 </div>
             </div>
 
-            <!-- Sync Settings -->
-            <section id="sync-settings" class="card">
-                <div class="card-header">
-                    <h2>Sync Schedule</h2>
-                    <p>Configure how often each data type is synchronized.</p>
-                </div>
-                <div class="card-body" id="sync-settings-list"></div>
-            </section>
+            <!-- Collections -->
+            <div class="card">
+                <h3>Collections</h3>
+                <p class="card-desc">Choose which data to sync across devices</p>
+                <div id="collections-list" class="collections-list"></div>
+            </div>
 
-            <!-- Connected Devices -->
-            <section id="devices-section" class="card">
-                <div class="card-header">
-                    <h2>Connected Devices</h2>
-                    <p>Devices linked to your Midori Sync account.</p>
+            <!-- Sync frequency -->
+            <div class="card">
+                <h3>Sync Frequency</h3>
+                <div class="form-group">
+                    <select id="select-interval">
+                        <option value="5">Every 5 minutes</option>
+                        <option value="15" selected>Every 15 minutes</option>
+                        <option value="30">Every 30 minutes</option>
+                        <option value="60">Every hour</option>
+                        <option value="0">Manual only</option>
+                    </select>
                 </div>
-                <div class="card-body" id="devices-list">
-                    <div class="empty-state">Loading...</div>
-                </div>
-            </section>
+            </div>
 
-            <!-- Pair New Device -->
-            <section id="pair-section" class="card">
-                <div class="card-header">
-                    <h2>Connect Another Device</h2>
-                    <p>Scan the QR code below from your other device's Midori Sync extension to link it to your account.</p>
+            <!-- Advanced -->
+            <details class="card">
+                <summary class="card-summary">Advanced Settings</summary>
+                <div class="form-group">
+                    <label for="input-server">Server URL</label>
+                    <input type="url" id="input-server" placeholder="https://sync.astian.org">
+                    <small>Only change this if you're using a self-hosted server</small>
+                    <button id="btn-save-server" class="btn btn-sm btn-secondary" style="margin-top:8px">Save</button>
                 </div>
-                <div class="card-body pair-body">
-                    <div id="qr-container" class="qr-container">
-                        <button id="generate-qr-btn" class="btn btn-primary">Generate QR Code</button>
-                    </div>
-                    <div id="pair-info" class="pair-info hidden">
-                        <div id="qr-canvas-wrap" class="qr-wrap"></div>
-                        <div class="pair-details">
-                            <label>Or share this code manually:</label>
-                            <div class="code-box">
-                                <code id="pair-code-display"></code>
-                                <button id="copy-code-btn" class="btn btn-sm btn-secondary">Copy</button>
-                            </div>
-                            <div id="pair-enc-key-box" class="code-box" style="margin-top:8px;display:none">
-                                <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:2px;">Encryption Key (also required on the other device):</label>
-                                <code id="pair-enc-key-display" style="word-break:break-all;font-size:10px;"></code>
-                                <button id="copy-enc-key-btn" class="btn btn-sm btn-secondary">Copy</button>
-                            </div>
-                            <p class="pair-expires">Expires in <span id="pair-timer">10:00</span></p>
-                        </div>
-                    </div>
-                </div>
-            </section>
+            </details>
 
-            <!-- Encryption -->
-            <section class="card" id="encryption-section">
-                <div class="card-header">
-                    <h2>Encryption</h2>
-                    <p>AES-GCM-256 end-to-end encryption. Your key never leaves this device.</p>
-                </div>
-                <div class="card-body">
-                    <div class="info-row">
-                        <span class="info-label">Key Fingerprint</span>
-                        <span class="info-value" id="enc-fingerprint">Loading…</span>
-                    </div>
-                    <div style="display:flex;gap:8px;margin-top:12px;">
-                        <button id="export-key-btn" class="btn btn-secondary">Export Key</button>
-                    </div>
-                    <div style="margin-top:16px;">
-                        <label for="import-key-input" style="display:block;font-size:13px;color:#6b7280;margin-bottom:6px;">Import key from another device</label>
-                        <div style="display:flex;gap:8px;">
-                            <input type="text" id="import-key-input" placeholder="Paste base64 key" style="flex:1;font-family:monospace;font-size:12px;">
-                            <button id="import-key-btn" class="btn btn-secondary">Import</button>
-                        </div>
-                        <p id="import-key-msg" class="hidden" style="font-size:12px;margin-top:6px;"></p>
-                    </div>
-                </div>
-            </section>
+            <!-- Encryption / Seed Phrase -->
+            <div class="card">
+                <h3>🔐 Encryption</h3>
+                <p class="card-desc">Your data is encrypted with a key derived from your seed phrase. The key never leaves your device.</p>
 
-            <!-- Passwords -->
-            <section class="card" id="passwords-section">
-                <div class="card-header">
-                    <h2>🔒 Passwords</h2>
-                    <p>Your credentials are encrypted with AES-GCM-256 before being stored on the server.</p>
+                <div id="seed-phrase-status" class="info-row">
+                    <span class="info-label">Encryption Status</span>
+                    <span id="encryption-status" class="info-value">Checking…</span>
                 </div>
-                <div class="card-body">
-                    <!-- Add / Edit form -->
-                    <div id="password-form-container" class="password-form-container">
-                        <h3 id="password-form-title" class="form-section-title">Add New Credential</h3>
-                        <input type="hidden" id="password-edit-id">
-                        <div class="pw-form-grid">
-                            <div class="field">
-                                <label for="pw-site">Website</label>
-                                <input type="url" id="pw-site" placeholder="https://example.com" autocomplete="off">
-                            </div>
-                            <div class="field">
-                                <label for="pw-username">Username / Email</label>
-                                <input type="text" id="pw-username" placeholder="user@example.com" autocomplete="off">
-                            </div>
-                            <div class="field">
-                                <label for="pw-password">Password</label>
-                                <div class="pw-input-wrap">
-                                    <input type="password" id="pw-password" placeholder="••••••••" autocomplete="new-password">
-                                    <button type="button" id="pw-toggle-visibility" class="btn btn-sm btn-secondary" title="Show/hide">👁</button>
-                                </div>
-                            </div>
-                            <div class="field">
-                                <label for="pw-notes">Notes <span style="font-weight:400;color:#9ca3af">(optional)</span></label>
-                                <input type="text" id="pw-notes" placeholder="e.g. Work account" autocomplete="off">
-                            </div>
-                        </div>
-                        <div id="password-form-error" class="error hidden"></div>
-                        <div class="pw-form-actions">
-                            <button id="pw-save-btn" class="btn btn-primary">Save</button>
-                            <button id="pw-cancel-btn" class="btn btn-secondary hidden">Cancel</button>
-                        </div>
-                    </div>
 
-                    <!-- List -->
-                    <div id="passwords-list" class="passwords-list">
-                        <div class="empty-state">Loading…</div>
+                <!-- View seed phrase -->
+                <div id="seed-phrase-viewer" class="seed-section hidden">
+                    <div class="seed-phrase-grid blurred" id="seed-grid"></div>
+                    <div class="seed-actions">
+                        <button id="btn-reveal-seed" class="btn btn-sm btn-secondary">👁 Reveal</button>
+                        <button id="btn-copy-seed" class="btn btn-sm btn-secondary">📋 Copy</button>
                     </div>
+                    <p class="seed-warning">⚠ Never share your seed phrase with anyone. Anyone with it can decrypt all your data.</p>
                 </div>
-            </section>
 
-            <!-- Server Configuration -->
-            <section class="card">
-                <div class="card-header">
-                    <h2>Server</h2>
-                    <p>Midori Sync server information.</p>
+                <!-- No key configured -->
+                <div id="seed-phrase-setup" class="seed-section hidden">
+                    <p class="card-desc">No encryption key configured. Set up a seed phrase to enable encryption.</p>
+                    <button id="btn-setup-seed" class="btn btn-primary" style="margin-top:8px">Set Up Seed Phrase</button>
                 </div>
-                <div class="card-body">
-                    <div class="info-row">
-                        <span class="info-label">Server URL</span>
-                        <span class="info-value" id="server-url-display">—</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">User ID</span>
-                        <span class="info-value" id="user-uid-display">—</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Device</span>
-                        <span class="info-value" id="device-name-display">—</span>
-                    </div>
-                </div>
-            </section>
 
-            <!-- Danger Zone -->
-            <section class="card card-danger">
-                <div class="card-header">
-                    <h2>Danger Zone</h2>
+                <!-- Recovery option -->
+                <div id="seed-phrase-recover" class="seed-section hidden" style="margin-top:12px">
+                    <button id="btn-recover-seed" class="btn btn-sm btn-secondary" style="width:100%">🔄 Recover with another Seed Phrase</button>
                 </div>
-                <div class="card-body">
-                    <div class="danger-row">
-                        <div>
-                            <strong>Sign out</strong>
-                            <p>Disconnect this device from Midori Sync.</p>
-                        </div>
-                        <button id="logout-btn" class="btn btn-danger">Sign Out</button>
-                    </div>
+            </div>
+
+            <!-- Danger zone -->
+            <div class="card card-danger">
+                <h3>Danger Zone</h3>
+                <div class="danger-actions">
+                    <button id="btn-logout" class="btn btn-danger">Sign Out</button>
                 </div>
-            </section>
-        </main>
+            </div>
+        </section>
+
+        <div id="toast" class="toast hidden"></div>
     </div>
 
-    <script src="../lib/qrcode.min.js"></script>
     <script src="options.js"></script>
 </body>
 </html>

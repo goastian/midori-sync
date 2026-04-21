@@ -1,18 +1,18 @@
 /**
  * Midori Sync — Background Service Worker
  *
- * Handles authentication, sync scheduling, and data synchronization
- * with the Midori Sync server.
+ * Handles authentication, sync scheduling, and data synchronization.
+ * Simplified flow: no manual server URL, passphrase, or device name required.
  */
 
 const DEFAULT_SERVER = 'http://localhost:8000';
+// Production: const DEFAULT_SERVER = 'https://sync.astian.org';
 
 const SYNC_TYPES = {
     bookmarks: { label: 'Bookmarks', interval: 15, enabled: true },
     history: { label: 'History', interval: 30, enabled: true },
     tabs: { label: 'Open Tabs', interval: 5, enabled: true },
     passwords: { label: 'Passwords', interval: 60, enabled: true },
-    // creditcards: { label: 'Credit Cards', interval: 60, enabled: false },
 };
 
 // ─── State ──────────────────────────────────────────────────────────────
@@ -24,67 +24,164 @@ let authState = {
     serverUrl: DEFAULT_SERVER,
 };
 
-// Delta sync: timestamp (microtime float) del último item recibido por colección
-let lastSyncTimes = {
-    bookmarks: 0,
-    history: 0,
-    tabs: 0,
-    passwords: 0,
-};
-
-// Debounce: timers pendientes por tipo para coalescencia de eventos
+let lastSyncTimes = { bookmarks: 0, history: 0, tabs: 0, passwords: 0 };
 let syncTimeouts = {};
-
-// In-memory CryptoKey para cifrado AES-GCM-256. Nunca sale del cliente.
 let encryptionKey = null;
 
-const syncCrypto = globalThis.MidoriSyncCrypto;
-if (!syncCrypto) {
+const MidoriSyncCryptoClass = globalThis.MidoriSyncCrypto;
+if (!MidoriSyncCryptoClass) {
     throw new Error('MidoriSyncCrypto library is not loaded');
 }
 
-const {
-    generateEncryptionKey,
-    exportKeyBase64,
-    importKeyBase64,
-    encryptPayload,
-    decryptBsoPayload,
-} = syncCrypto;
+const crypto_ = new MidoriSyncCryptoClass();
+
+// ─── Encryption Key Management ──────────────────────────────────────────
+// Keys NEVER leave the client. A 12-word BIP39 mnemonic seed phrase is
+// generated client-side. The 32-byte encryption key is derived from it
+// via Argon2id. The server only stores encrypted payloads.
+
+// Fixed salt for Argon2id key derivation (16 bytes = "MidoriSync_v1_KD")
+const SEED_KDF_SALT = new Uint8Array([77,105,100,111,114,105,83,121,110,99,95,118,49,95,75,68]);
 
 /**
- * Load or generate the AES-GCM-256 encryption key.
- *
- * First run: generates a fresh key, persists it to storage.local, and sets
- * encryptionMigrationNeeded so existing plaintext server data is re-encrypted.
- * Subsequent runs: imports the persisted key from storage.local into memory.
+ * Load the encryption key from local storage. Does NOT auto-generate.
+ * If no key exists, encryptionKey stays null and the UI must handle setup.
  */
 async function initEncryptionKey() {
+    await crypto_.init();
     const stored = await browser.storage.local.get('encryptionKey');
     if (stored.encryptionKey) {
-        encryptionKey = await importKeyBase64(stored.encryptionKey);
-        return;
+        encryptionKey = crypto_.sodium.from_base64(stored.encryptionKey, crypto_.sodium.base64_variants.ORIGINAL);
     }
-    // First time — generate, persist, and mark data for migration.
-    encryptionKey = await generateEncryptionKey();
-    const b64 = await exportKeyBase64(encryptionKey);
+    // If no key, encryptionKey remains null — UI will prompt for seed phrase setup
+}
+
+/**
+ * Generate a BIP39 12-word mnemonic from 128 bits of entropy.
+ * Uses libsodium for secure random generation and SHA-256 for checksum.
+ */
+function generateMnemonic() {
+    const entropy = crypto_.sodium.randombytes_buf(16); // 128 bits
+    return entropyToMnemonic(entropy);
+}
+
+/**
+ * Convert 16 bytes of entropy to a 12-word BIP39 mnemonic.
+ */
+function entropyToMnemonic(entropy) {
+    // SHA-256 checksum
+    const hash = crypto_.sodium.crypto_hash_sha256(entropy);
+    const checksumBits = hash[0] >> 4; // first 4 bits
+
+    // Combine entropy (128 bits) + checksum (4 bits) = 132 bits → 12 × 11
+    const bits = [];
+    for (let i = 0; i < entropy.length; i++) {
+        for (let b = 7; b >= 0; b--) bits.push((entropy[i] >> b) & 1);
+    }
+    for (let b = 3; b >= 0; b--) bits.push((checksumBits >> b) & 1);
+
+    const words = [];
+    for (let i = 0; i < 12; i++) {
+        let idx = 0;
+        for (let b = 0; b < 11; b++) idx = (idx << 1) | bits[i * 11 + b];
+        words.push(BIP39_WORDLIST[idx]);
+    }
+    return words.join(' ');
+}
+
+/**
+ * Validate a mnemonic: 12 words, all in BIP39 list, checksum matches.
+ */
+function validateMnemonic(mnemonic) {
+    const words = mnemonic.trim().toLowerCase().split(/\s+/);
+    if (words.length !== 12) return false;
+
+    const indices = words.map(w => BIP39_WORDLIST.indexOf(w));
+    if (indices.some(i => i === -1)) return false;
+
+    // Reconstruct bits
+    const bits = [];
+    for (const idx of indices) {
+        for (let b = 10; b >= 0; b--) bits.push((idx >> b) & 1);
+    }
+
+    // Extract entropy (128 bits) and checksum (4 bits)
+    const entropy = new Uint8Array(16);
+    for (let i = 0; i < 16; i++) {
+        let byte = 0;
+        for (let b = 0; b < 8; b++) byte = (byte << 1) | bits[i * 8 + b];
+        entropy[i] = byte;
+    }
+
+    let checksumBits = 0;
+    for (let b = 0; b < 4; b++) checksumBits = (checksumBits << 1) | bits[128 + b];
+
+    // Verify checksum
+    const hash = crypto_.sodium.crypto_hash_sha256(entropy);
+    const expectedChecksum = hash[0] >> 4;
+    return checksumBits === expectedChecksum;
+}
+
+/**
+ * Derive a 32-byte encryption key from a mnemonic using Argon2id.
+ * Deterministic: same mnemonic always produces the same key.
+ */
+function deriveKeyFromMnemonic(mnemonic) {
+    return crypto_.sodium.crypto_pwhash(
+        32, // key length
+        mnemonic,
+        SEED_KDF_SALT,
+        crypto_.sodium.crypto_pwhash_OPSLIMIT_INTERACTIVE,
+        crypto_.sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
+        crypto_.sodium.crypto_pwhash_ALG_ARGON2ID13
+    );
+}
+
+/**
+ * Store the derived key and mnemonic locally. Server never sees either.
+ */
+async function setupEncryptionFromMnemonic(mnemonic) {
+    await crypto_.init();
+    const key = deriveKeyFromMnemonic(mnemonic);
+    encryptionKey = key;
+    const b64 = crypto_.sodium.to_base64(key, crypto_.sodium.base64_variants.ORIGINAL);
     await browser.storage.local.set({
         encryptionKey: b64,
-        encryptionMigrationNeeded: true,
+        seedPhrase: mnemonic,
     });
-    // Reset BOTH delta-sync timestamps (downloads) AND lastSync (uploads)
-    // so migration re-downloads all server items and the next syncHistory
-    // does a full paginated upload of the 30-day history, all encrypted
-    // with the new key.
     lastSyncTimes = { bookmarks: 0, history: 0, tabs: 0, passwords: 0 };
     await browser.storage.local.set({ lastSyncTimes });
     await browser.storage.local.remove('lastSync');
-    console.log('[Midori Sync] New encryption key generated.');
+    console.log('[Midori Sync] Encryption key derived from seed phrase.');
+}
+
+// ─── Crypto Helpers ─────────────────────────────────────────────────────
+
+function exportKeyBase64(key) {
+    return crypto_.sodium.to_base64(key, crypto_.sodium.base64_variants.ORIGINAL);
+}
+
+function importKeyBase64(b64) {
+    return crypto_.sodium.from_base64(b64, crypto_.sodium.base64_variants.ORIGINAL);
+}
+
+function encryptPayload(plaintext, key) {
+    return crypto_.encrypt(plaintext, key);
+}
+
+function decryptBsoPayload(bso, key) {
+    if (!key || !bso.payload) return bso;
+    try {
+        const decrypted = crypto_.decrypt(bso.payload, key);
+        return { ...bso, payload: decrypted, _decrypted: true };
+    } catch (e) {
+        console.warn('[Midori Sync] Decryption failed for BSO', bso.id, ':', e.message || e);
+        return { ...bso, _decrypted: false };
+    }
 }
 
 /**
  * Re-encrypt all existing server-side plaintext data.
- * Runs once after a fresh key is generated (encryptionMigrationNeeded flag).
- * The upload path now encrypts automatically, so we download → re-upload.
  */
 async function migrateToEncryption() {
     console.log('[Midori Sync] Migrating existing data to encrypted storage...');
@@ -93,9 +190,13 @@ async function migrateToEncryption() {
         try {
             const items = await fetchCollection(col, false);
             if (items.length === 0) continue;
-            const bsos = items.map(item => ({ id: item.id, payload: item.payload }));
+            // Only re-upload items that were successfully decrypted (plaintext)
+            // Skip items that failed decryption to avoid double-encryption
+            const plaintextItems = items.filter(item => item._decrypted !== false);
+            if (plaintextItems.length === 0) continue;
+            const bsos = plaintextItems.map(item => ({ id: item.id, payload: item.payload }));
             await uploadBsos(col, bsos);
-            console.log(`[Midori Sync] Migrated ${items.length} items in '${col}'.`);
+            console.log(`[Midori Sync] Migrated ${plaintextItems.length} items in '${col}'.`);
         } catch (e) {
             console.warn(`[Midori Sync] Migration failed for '${col}':`, e);
         }
@@ -106,10 +207,6 @@ async function migrateToEncryption() {
 
 // ─── Initialization ─────────────────────────────────────────────────────
 
-/**
- * Restore auth state from storage. Runs every time the background
- * script loads (browser start, event page wake-up, extension reload).
- */
 async function initializeState() {
     const stored = await browser.storage.local.get([
         'auth', 'syncSettings', 'serverUrl', 'lastSyncTimes', 'encryptionMigrationNeeded',
@@ -140,10 +237,7 @@ async function initializeState() {
     }
 }
 
-// Run immediately on script load (covers event page wake-up)
 initializeState();
-
-// Also run on browser startup and extension install/update
 browser.runtime.onStartup.addListener(initializeState);
 browser.runtime.onInstalled.addListener(initializeState);
 
@@ -160,11 +254,14 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         redeemPairingToken: handleRedeemPairingToken,
         getProfile: handleGetProfile,
         removeDevice: handleRemoveDevice,
-        exportEncryptionKey: handleExportEncryptionKey,
-        importEncryptionKey: handleImportEncryptionKey,
+        generateSeedPhrase: handleGenerateSeedPhrase,
+        completeSeedPhraseSetup: handleCompleteSeedPhraseSetup,
+        recoverWithSeedPhrase: handleRecoverWithSeedPhrase,
+        getSeedPhrase: handleGetSeedPhrase,
         getPasswords: handleGetPasswords,
         savePassword: handleSavePassword,
         deletePassword: handleDeletePassword,
+        updateServerUrl: handleUpdateServerUrl,
     };
 
     const handler = handlers[msg.type];
@@ -172,34 +269,33 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         handler(msg.data).then(sendResponse).catch(err => {
             sendResponse({ error: err.message });
         });
-        return true; // async response
+        return true;
     }
 });
 
 // ─── Auth Handlers ──────────────────────────────────────────────────────
 
 /**
- * Start the OAuth2 Authorization Code login flow.
- *
- * 1. Calls /api/ext/auth/start to get the Authentik auth URL + state
- * 2. Opens the auth URL in a new browser tab
- * 3. Polls /api/ext/auth/poll until the server confirms login
- * 4. Stores the API token and user info
+ * Auto-detect device name from browser info.
  */
-async function handleLogin(data) {
-    const { serverUrl } = data;
-    const server = serverUrl || authState.serverUrl;
+async function getDeviceName() {
+    try {
+        const info = await browser.runtime.getBrowserInfo();
+        return `${info.name} on ${navigator.platform}`;
+    } catch {
+        return `Browser on ${navigator.platform}`;
+    }
+}
 
-    // Get browser info for device name
-    const browserInfo = await browser.runtime.getBrowserInfo().catch(() => ({
-        name: 'Midori', version: '0',
-    }));
-    const deviceName = `${browserInfo.name} on ${navigator.platform}`;
-
-    // Reuse existing device_id if we have one (prevents duplicate device registrations)
+/**
+ * Start the OAuth2 login flow.
+ * No configuration required — server URL is pre-defined, device name is auto-detected.
+ */
+async function handleLogin() {
+    const server = authState.serverUrl;
+    const deviceName = await getDeviceName();
     const existingDeviceId = authState.device?.id || '';
 
-    // Step 1: Get auth URL from server
     const startResp = await fetch(
         `${server}/api/ext/auth/start?device_name=${encodeURIComponent(deviceName)}&device_type=desktop&device_id=${encodeURIComponent(existingDeviceId)}`,
         { headers: { 'Accept': 'application/json' } }
@@ -211,10 +307,9 @@ async function handleLogin(data) {
 
     const { auth_url, state } = await startResp.json();
 
-    // Step 2: Open Authentik login page in a new tab
     const tab = await browser.tabs.create({ url: auth_url });
 
-    // Step 3: Poll for the result with exponential backoff (up to 5 minutes)
+    // Poll with exponential backoff (up to 5 minutes)
     const maxAttempts = 150;
     const baseDelay = 1000;
     const backoffMultiplier = 1.5;
@@ -224,11 +319,9 @@ async function handleLogin(data) {
         const delay = Math.min(baseDelay * Math.pow(backoffMultiplier, i), maxDelay);
         await new Promise(resolve => setTimeout(resolve, delay));
 
-        // Check if the tab was closed by the user
         try {
             await browser.tabs.get(tab.id);
         } catch {
-            // Tab was closed — check one last time
             const finalResp = await fetch(
                 `${server}/api/ext/auth/poll?state=${state}`,
                 { headers: { 'Accept': 'application/json' } }
@@ -250,20 +343,17 @@ async function handleLogin(data) {
         const pollResult = await pollResp.json();
 
         if (pollResult.status === 'complete') {
-            // Close the auth tab
             browser.tabs.remove(tab.id).catch(() => {});
             return await completeLogin(pollResult, server);
         }
-        // status === 'pending' → keep polling
     }
 
     throw new Error('Login timed out. Please try again.');
 }
 
 /**
- * Complete the login process after receiving the token from the server.
- * After storing credentials, restores data from the server to populate
- * the local browser (bookmarks, history, tabs).
+ * Complete login: store credentials, setup sync, restore data.
+ * Also uploads the encryption key bundle to the server for recovery.
  */
 async function completeLogin(result, server) {
     authState = {
@@ -278,14 +368,23 @@ async function completeLogin(result, server) {
         serverUrl: server,
     });
 
+    await initEncryptionKey();
+
+    if (!encryptionKey) {
+        // No key yet — user needs to set up seed phrase
+        // Don't start sync until encryption is configured
+        return { success: true, needsKeySetup: true, user: result.user, device: result.device };
+    }
+
+    // Key exists — migrate plaintext, then start sync
+    await migrateToEncryption().catch(e =>
+        console.warn('[Midori Sync] Encryption migration after login failed:', e)
+    );
+
     const stored = await browser.storage.local.get('syncSettings');
     setupSyncAlarms(stored.syncSettings || {});
     updateBadge('on');
 
-    // Ensure the encryption key is ready before downloading data from server.
-    await initEncryptionKey();
-
-    // Restore data from server after login
     try {
         await restoreFromServer();
     } catch (e) {
@@ -295,112 +394,148 @@ async function completeLogin(result, server) {
     return { success: true, user: result.user, device: result.device };
 }
 
+// ─── Seed Phrase Handlers ───────────────────────────────────────────────
+
 /**
- * Pull all synced data from the server and populate the local browser.
- * Runs once after login to restore bookmarks, history, and tabs.
+ * Generate a new 12-word mnemonic. Does NOT store it yet —
+ * the user must confirm they saved it before we finalize.
  */
+async function handleGenerateSeedPhrase() {
+    await crypto_.init();
+    const mnemonic = generateMnemonic();
+    return { mnemonic };
+}
+
+/**
+ * Finalize seed phrase setup: derive key, store locally, start sync.
+ */
+async function handleCompleteSeedPhraseSetup(data) {
+    const { mnemonic } = data;
+    if (!validateMnemonic(mnemonic)) throw new Error('Invalid seed phrase');
+
+    await setupEncryptionFromMnemonic(mnemonic);
+
+    // Encrypt any existing plaintext data on the server
+    if (authState.token) {
+        await migrateToEncryption().catch(e =>
+            console.warn('[Midori Sync] Migration after seed setup failed:', e)
+        );
+
+        const stored = await browser.storage.local.get('syncSettings');
+        setupSyncAlarms(stored.syncSettings || {});
+        updateBadge('on');
+
+        await restoreFromServer().catch(e =>
+            console.warn('[Midori Sync] Restore after seed setup failed:', e)
+        );
+    }
+
+    return { success: true };
+}
+
+/**
+ * Recover encryption from an existing seed phrase (e.g. new device).
+ */
+async function handleRecoverWithSeedPhrase(data) {
+    const { mnemonic } = data;
+    if (!validateMnemonic(mnemonic)) throw new Error('Invalid seed phrase. Check that all 12 words are correct.');
+
+    await setupEncryptionFromMnemonic(mnemonic);
+
+    if (authState.token) {
+        const stored = await browser.storage.local.get('syncSettings');
+        setupSyncAlarms(stored.syncSettings || {});
+        updateBadge('on');
+
+        await restoreFromServer().catch(e =>
+            console.warn('[Midori Sync] Restore after recovery failed:', e)
+        );
+    }
+
+    return { success: true };
+}
+
+/**
+ * Return the stored seed phrase so the user can view it in settings.
+ */
+async function handleGetSeedPhrase() {
+    const stored = await browser.storage.local.get('seedPhrase');
+    if (!stored.seedPhrase) throw new Error('No seed phrase stored');
+    return { mnemonic: stored.seedPhrase };
+}
+
 async function restoreFromServer() {
     console.log('[Midori Sync] Restoring data from server...');
     updateBadge('syncing');
-
+    // Reset sync timestamps to ensure full fetch, not incremental
+    lastSyncTimes = { bookmarks: 0, history: 0, tabs: 0, passwords: 0 };
+    await browser.storage.local.set({ lastSyncTimes });
     await restoreBookmarks();
     await restoreHistory();
-    // Tabs are read-only from other devices — just upload ours
     await syncTabs();
-
     updateBadge('on');
     console.log('[Midori Sync] Data restore complete.');
 }
 
-/**
- * Restore bookmarks from the server into the local browser.
- * Only creates bookmarks that don't already exist locally (by URL).
- */
 async function restoreBookmarks() {
-    const serverData = await fetchCollection('bookmarks');
+    const serverData = await fetchCollection('bookmarks', false);
     if (!serverData || serverData.length === 0) return;
-
-    // Get existing local bookmarks by URL for deduplication
+    // Filter out items that failed decryption
+    const decryptedData = serverData.filter(bso => bso._decrypted !== false);
+    if (decryptedData.length === 0) {
+        console.warn('[Midori Sync] All bookmarks failed decryption — wrong encryption key?');
+        return;
+    }
     const tree = await browser.bookmarks.getTree();
     const localUrls = new Set();
     flattenBookmarks(tree).forEach(b => localUrls.add(b.url));
-
     let restored = 0;
-    for (const bso of serverData) {
+    for (const bso of decryptedData) {
         try {
             const payload = JSON.parse(bso.payload);
             if (payload.url && !localUrls.has(payload.url)) {
-                await browser.bookmarks.create({
-                    title: payload.title || payload.url,
-                    url: payload.url,
+                await browser.bookmarks.create({ title: payload.title || payload.url, url: payload.url });
+                restored++;
+            }
+        } catch (e) { /* skip unparseable */ }
+    }
+    console.log(`[Midori Sync] Restored ${restored} bookmarks.`);
+}
+
+async function restoreHistory() {
+    const serverData = await fetchCollection('history', false);
+    if (!serverData || serverData.length === 0) return;
+    // Filter out items that failed decryption
+    const decryptedData = serverData.filter(bso => bso._decrypted !== false);
+    if (decryptedData.length === 0) {
+        console.warn('[Midori Sync] All history entries failed decryption — wrong encryption key?');
+        return;
+    }
+    let restored = 0;
+    for (const bso of decryptedData) {
+        try {
+            const payload = JSON.parse(bso.payload);
+            if (payload.url) {
+                await browser.history.addUrl({
+                    url: payload.url, title: payload.title || '',
+                    visitTime: payload.lastVisitTime || Date.now(),
                 });
                 restored++;
             }
-        } catch (e) {
-            // Skip malformed entries
-        }
+        } catch (e) { /* skip unparseable */ }
     }
-    console.log(`[Midori Sync] Restored ${restored} bookmarks from server.`);
-}
-
-/**
- * Restore history from the server into the local browser.
- * Uses browser.history.addUrl to populate entries that don't exist locally.
- * Persists server data to IndexedDB to avoid saturating storage.local.
- */
-async function restoreHistory() {
-    const serverData = await fetchCollection('history');
-    if (!serverData || serverData.length === 0) return;
-
-    const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000;
-    const thirtyDaysAgo = Date.now() - THIRTY_DAYS_MS;
-
-    // Solo restaurar historial reciente (30 días)
-    const recentData = serverData.filter(bso => {
-        try {
-            const payload = JSON.parse(bso.payload);
-            return payload.lastVisitTime && payload.lastVisitTime >= thirtyDaysAgo;
-        } catch {
-            return false;
-        }
-    });
-
-    // Guardar en IndexedDB para referencia futura (no en storage.local)
-    const idbItems = recentData.flatMap(bso => {
-        try {
-            return [JSON.parse(bso.payload)];
-        } catch {
-            return [];
-        }
+    // Also store in IndexedDB for local cache
+    const idbItems = decryptedData.flatMap(bso => {
+        try { return [JSON.parse(bso.payload)]; } catch { return []; }
     });
     if (idbItems.length > 0) {
         await storeHistory(idbItems).catch(e =>
             console.warn('[Midori Sync] IndexedDB store failed:', e)
         );
     }
-
-    let restored = 0;
-    for (const bso of recentData) {
-        try {
-            const payload = JSON.parse(bso.payload);
-            if (payload.url) {
-                await browser.history.addUrl({
-                    url: payload.url,
-                    title: payload.title || '',
-                    visitTime: payload.lastVisitTime || Date.now(),
-                });
-                restored++;
-            }
-        } catch (e) {
-            // Skip malformed entries
-        }
-    }
-    console.log(`[Midori Sync] Restored ${restored} history entries from server.`);
+    console.log(`[Midori Sync] Restored ${restored} history entries.`);
 }
 
-/**
- * Log the user out and stop all sync alarms.
- */
 async function handleLogout() {
     if (authState.token) {
         await fetch(`${authState.serverUrl}/api/ext/logout`, {
@@ -408,28 +543,19 @@ async function handleLogout() {
             headers: authHeaders(),
         }).catch(() => {});
     }
-
     authState = { token: null, user: null, device: null, serverUrl: authState.serverUrl };
     await browser.storage.local.remove('auth');
     await browser.alarms.clearAll();
     updateBadge('off');
-
     return { success: true };
 }
 
-/**
- * Return the current authentication and sync state.
- * Always reads from storage to avoid race conditions with initializeState().
- */
 async function handleGetState() {
     const stored = await browser.storage.local.get(['auth', 'syncSettings', 'lastSync', 'serverUrl', 'storageInfo']);
-
-    // Ensure in-memory state is up to date
     if (stored.auth && stored.auth.token && !authState.token) {
         authState = { ...authState, ...stored.auth };
         if (stored.serverUrl) authState.serverUrl = stored.serverUrl;
     }
-
     return {
         isLoggedIn: !!authState.token,
         user: authState.user,
@@ -442,58 +568,47 @@ async function handleGetState() {
     };
 }
 
-/**
- * Get user profile and devices from server.
- */
 async function handleGetProfile() {
     if (!authState.token) throw new Error('Not logged in');
-
-    const response = await fetch(`${authState.serverUrl}/api/ext/profile`, {
-        headers: authHeaders(),
-    });
-
+    const response = await fetch(`${authState.serverUrl}/api/ext/profile`, { headers: authHeaders() });
     if (!response.ok) throw new Error('Failed to fetch profile');
-
     return await response.json();
+}
+
+/**
+ * Allow changing the server URL from settings (advanced).
+ */
+async function handleUpdateServerUrl(data) {
+    const { serverUrl } = data;
+    if (!serverUrl) throw new Error('Server URL is required');
+    authState.serverUrl = serverUrl.replace(/\/+$/, '');
+    await browser.storage.local.set({ serverUrl: authState.serverUrl });
+    return { success: true };
 }
 
 // ─── Sync Handlers ──────────────────────────────────────────────────────
 
-/**
- * Trigger a manual sync for all enabled types or a specific type.
- */
 async function handleSyncNow(data) {
     if (!authState.token) throw new Error('Not logged in');
-
     const type = data?.type;
     const stored = await browser.storage.local.get('syncSettings');
     const settings = stored.syncSettings || {};
-
     if (type) {
         await syncDataType(type);
     } else {
-        // Sync all enabled types
         for (const [key, defaults] of Object.entries(SYNC_TYPES)) {
             const enabled = settings[key]?.enabled ?? defaults.enabled;
-            if (enabled) {
-                await syncDataType(key);
-            }
+            if (enabled) await syncDataType(key);
         }
     }
-
-    // Update sync status on server
     await fetch(`${authState.serverUrl}/api/ext/sync/status`, {
         method: 'POST',
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ device_id: authState.device?.id }),
     }).catch(() => {});
-
     return { success: true };
 }
 
-/**
- * Save sync settings (intervals, enabled/disabled per type).
- */
 async function handleSaveSyncSettings(data) {
     await browser.storage.local.set({ syncSettings: data });
     setupSyncAlarms(data);
@@ -502,80 +617,43 @@ async function handleSaveSyncSettings(data) {
 
 // ─── Sync Engine ────────────────────────────────────────────────────────
 
-/**
- * Sync a specific data type with the server.
- * Libera referencias a datos grandes en el bloque finally para ayudar al GC.
- */
 async function syncDataType(type) {
     const now = new Date().toISOString();
     let syncPromise = null;
     let shouldMarkSynced = true;
-
     try {
         switch (type) {
-            case 'bookmarks':
-                syncPromise = syncBookmarks();
-                break;
-            case 'history':
-                syncPromise = syncHistory();
-                break;
-            case 'tabs':
-                syncPromise = syncTabs();
-                break;
-            case 'passwords':
-                // Passwords require the optional "logins" permission
-                syncPromise = syncPasswords();
-                shouldMarkSynced = false;
-                break;
+            case 'bookmarks': syncPromise = syncBookmarks(); break;
+            case 'history': syncPromise = syncHistory(); break;
+            case 'tabs': syncPromise = syncTabs(); break;
+            case 'passwords': syncPromise = syncPasswords(); shouldMarkSynced = false; break;
         }
-
         if (syncPromise) await syncPromise;
-
-        if (!shouldMarkSynced) {
-            return;
-        }
-
-        // Update last sync timestamp
+        if (!shouldMarkSynced) return;
         const stored = await browser.storage.local.get('lastSync');
         const lastSync = stored.lastSync || {};
         lastSync[type] = now;
         await browser.storage.local.set({ lastSync });
-
-        // Refresh storage quota info (best-effort)
         refreshStorageInfo();
-
         console.log(`[Midori Sync] Synced ${type} at ${now}`);
     } catch (err) {
         console.error(`[Midori Sync] Failed to sync ${type}:`, err);
     } finally {
-        syncPromise = null; // Liberar referencia explícita
+        syncPromise = null;
     }
 }
 
-/**
- * Sync bookmarks with the server.
- * Downloads server bookmarks and merges with local ones.
- */
 async function syncBookmarks() {
-    // Get local bookmarks
     const tree = await browser.bookmarks.getTree();
     const localBookmarks = flattenBookmarks(tree);
-
-    // Get server bookmarks
     const serverData = await fetchCollection('bookmarks');
-
-    // Upload local bookmarks not on server
     const serverIds = new Set(serverData.map(b => b.id));
     const toUpload = localBookmarks.filter(b => !serverIds.has(b.id));
-
     if (toUpload.length > 0) {
         await uploadBsos('bookmarks', toUpload.map(b => ({
-            id: b.id,
-            payload: JSON.stringify(b),
+            id: b.id, payload: JSON.stringify(b),
         })));
     }
-
-    // Create local bookmarks from server that don't exist locally
     const localIds = new Set(localBookmarks.map(b => b.id));
     for (const serverBso of serverData) {
         if (!localIds.has(serverBso.id)) {
@@ -583,45 +661,29 @@ async function syncBookmarks() {
                 const payload = JSON.parse(serverBso.payload);
                 if (payload.url && payload.title) {
                     await browser.bookmarks.create({
-                        title: payload.title,
-                        url: payload.url,
+                        title: payload.title, url: payload.url,
                         parentId: payload.parentId || undefined,
                     });
                 }
-            } catch (e) {
-                console.warn('[Midori Sync] Could not create bookmark:', e);
-            }
+            } catch (e) { console.warn('[Midori Sync] Bookmark create failed:', e); }
         }
     }
 }
 
-/**
- * Flatten the bookmark tree into a list of bookmark objects.
- */
 function flattenBookmarks(nodes, result = []) {
     for (const node of nodes) {
         if (node.url) {
             result.push({
                 id: 'bk-' + hashString(node.url),
-                title: node.title || '',
-                url: node.url,
-                parentId: node.parentId,
-                dateAdded: node.dateAdded,
+                title: node.title || '', url: node.url,
+                parentId: node.parentId, dateAdded: node.dateAdded,
             });
         }
-        if (node.children) {
-            flattenBookmarks(node.children, result);
-        }
+        if (node.children) flattenBookmarks(node.children, result);
     }
     return result;
 }
 
-/**
- * Fetch the full browser history for the given time range by paginating
- * through chunks of 500 items, overcoming the per-search maxResults cap.
- * Deduplicates by browser item ID. Returns at most MAX_FULL_HISTORY_ITEMS
- * to keep the upload bounded for very active users.
- */
 const MAX_FULL_HISTORY_ITEMS = 5000;
 
 async function fetchFullHistory(startTime) {
@@ -629,96 +691,55 @@ async function fetchFullHistory(startTime) {
     const seenIds = new Set();
     let endTime = Date.now();
     let previousEndTime = null;
-
     while (allItems.length < MAX_FULL_HISTORY_ITEMS) {
         const beforeCount = allItems.length;
-        const page = await browser.history.search({
-            text: '',
-            startTime,
-            endTime,
-            maxResults: 500,
-        });
-
+        const page = await browser.history.search({ text: '', startTime, endTime, maxResults: 500 });
         if (page.length === 0) break;
-
         for (const item of page) {
-            if (!seenIds.has(item.id)) {
-                seenIds.add(item.id);
-                allItems.push(item);
-            }
+            if (!seenIds.has(item.id)) { seenIds.add(item.id); allItems.push(item); }
         }
-
-        // If we got fewer than requested we've reached the start of history.
         if (page.length < 500) break;
-
-        // Next page: items strictly older than the oldest in this page.
         const oldestVisit = Math.min(...page.map(i => i.lastVisitTime));
         if (oldestVisit <= startTime) break;
         endTime = oldestVisit - 1;
-
-        // Safety guards for browsers that ignore endTime or return repeated pages.
         if (allItems.length === beforeCount) break;
         if (previousEndTime !== null && endTime >= previousEndTime) break;
         previousEndTime = endTime;
     }
-
     return allItems;
 }
 
-/**
- * Sync browsing history with the server.
- * Initial sync (no lastSync.history): paginates through all 30-day history.
- * Incremental sync: fetches only items since the last sync timestamp.
- */
 async function syncHistory() {
     const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000;
     const thirtyDaysAgo = Date.now() - THIRTY_DAYS_MS;
-
     const stored = await browser.storage.local.get('lastSync');
     const lastSync = stored.lastSync?.history;
-    // Usa lastSync si existe, pero nunca más de 30 días atrás
     const startTime = lastSync
         ? Math.max(new Date(lastSync).getTime(), thirtyDaysAgo)
         : thirtyDaysAgo;
-
-    // Full (initial) sync: paginate through all history to capture every URL.
-    // Incremental sync: simple bounded search covers the small delta.
     const historyItems = lastSync
         ? await browser.history.search({ text: '', startTime, maxResults: 500 })
         : await fetchFullHistory(thirtyDaysAgo);
-
     if (historyItems.length === 0) return;
-
     const bsos = historyItems.map(item => ({
         id: 'hi-' + hashString(item.url),
         payload: JSON.stringify({
-            url: item.url,
-            title: item.title || '',
-            visitCount: item.visitCount,
-            lastVisitTime: item.lastVisitTime,
+            url: item.url, title: item.title || '',
+            visitCount: item.visitCount, lastVisitTime: item.lastVisitTime,
         }),
     }));
-
     await uploadBsos('history', bsos);
 }
 
-/**
- * Sync open tabs with the server.
- */
 async function syncTabs() {
     const tabs = await browser.tabs.query({});
     const tabData = tabs
         .filter(t => t.url && !t.url.startsWith('about:') && !t.url.startsWith('moz-extension:'))
         .map(t => ({
-            url: t.url,
-            title: t.title || '',
-            icon: t.favIconUrl || '',
-            active: t.active,
-            lastAccessed: t.lastAccessed,
+            url: t.url, title: t.title || '', icon: t.favIconUrl || '',
+            active: t.active, lastAccessed: t.lastAccessed,
         }));
-
     const clientId = authState.device?.id || 'unknown';
-
     await uploadBsos('tabs', [{
         id: clientId,
         payload: JSON.stringify({
@@ -728,43 +749,21 @@ async function syncTabs() {
     }]);
 }
 
-/**
- * Sync passwords (built-in password manager).
- *
- * Passwords are stored plaintext in browser.storage.local (sandboxed per
- * extension, not accessible to websites) and encrypted with AES-GCM-256
- * before being uploaded to the server.
- *
- * Merge strategy: last updatedAt wins per entry id.
- */
 async function syncPasswords() {
     const stored = await browser.storage.local.get('passwords');
     const localPasswords = stored.passwords || [];
-
-    // 1. Upload local entries to server
     if (localPasswords.length > 0) {
         await uploadBsos('passwords', localPasswords.map(p => ({
-            id: p.id,
-            payload: JSON.stringify(p),
+            id: p.id, payload: JSON.stringify(p),
         })));
     }
-
-    // 2. Download entries from server (decrypted by fetchCollection)
     const serverBsos = await fetchCollection('passwords');
     if (serverBsos.length === 0) return;
-
-    // 3. Parse payloads
     const serverPasswords = serverBsos.map(bso => {
-        try {
-            return typeof bso.payload === 'string' ? JSON.parse(bso.payload) : bso.payload;
-        } catch {
-            return null;
-        }
+        try { return typeof bso.payload === 'string' ? JSON.parse(bso.payload) : bso.payload; }
+        catch { return null; }
     }).filter(p => p && p.id);
-
     if (serverPasswords.length === 0) return;
-
-    // 4. Merge: most recent updatedAt wins per id
     const merged = new Map(localPasswords.map(p => [p.id, p]));
     for (const sp of serverPasswords) {
         const local = merged.get(sp.id);
@@ -772,180 +771,83 @@ async function syncPasswords() {
             merged.set(sp.id, sp);
         }
     }
-
     await browser.storage.local.set({ passwords: Array.from(merged.values()) });
-    console.log(`[Midori Sync] Password sync complete: ${merged.size} entries.`);
 }
 
-/**
- * Return all locally stored password entries (plaintext).
- */
 async function handleGetPasswords() {
     const stored = await browser.storage.local.get('passwords');
     return stored.passwords || [];
 }
 
-/**
- * Save a password entry (create new if no id, update existing if id present).
- * Triggers an immediate sync after saving.
- */
 async function handleSavePassword(data) {
     const { id, site, username, password, notes } = data;
     if (!site || !username || !password) throw new Error('site, username and password are required');
-
     const stored = await browser.storage.local.get('passwords');
     const passwords = stored.passwords || [];
     const now = new Date().toISOString();
-
     if (id) {
-        // Update existing
         const idx = passwords.findIndex(p => p.id === id);
         if (idx === -1) throw new Error('Password entry not found');
         passwords[idx] = { ...passwords[idx], site, username, password, notes: notes || '', updatedAt: now };
     } else {
-        // Create new
         passwords.push({
-            id: crypto.randomUUID(),
-            site,
-            username,
-            password,
-            notes: notes || '',
-            createdAt: now,
-            updatedAt: now,
+            id: crypto.randomUUID(), site, username, password,
+            notes: notes || '', createdAt: now, updatedAt: now,
         });
     }
-
     await browser.storage.local.set({ passwords });
-
-    // Sync immediately (best-effort)
     if (authState.token) {
         syncDataType('passwords').catch(e =>
             console.warn('[Midori Sync] Post-save password sync failed:', e)
         );
     }
-
     return { success: true };
 }
 
-/**
- * Delete a password entry by id.
- * Note: this only removes it locally; the BSO remains on the server until
- * a server-side delete endpoint is implemented.
- */
 async function handleDeletePassword(data) {
     const { id } = data;
     if (!id) throw new Error('id is required');
-
     const stored = await browser.storage.local.get('passwords');
     const passwords = (stored.passwords || []).filter(p => p.id !== id);
     await browser.storage.local.set({ passwords });
-
     return { success: true };
 }
 
 // ─── Server Communication ───────────────────────────────────────────────
 
-/**
- * Fetch a collection from the sync server.
- * Usa delta sync: solo descarga items modificados después de lastSyncTimes[collection].
- * Para colecciones grandes usa fetchCollectionPaginated en su lugar.
- */
 async function fetchCollection(collection, incrementalOnly = true) {
     if (!authState.token) return [];
-
     let url = `${authState.serverUrl}/api/ext/storage/${collection}`;
     if (incrementalOnly && lastSyncTimes[collection]) {
         url += `?newer=${lastSyncTimes[collection]}`;
     }
-
     const resp = await fetch(url, { headers: authHeaders() });
-
     if (!resp.ok) return [];
-
     const items = await resp.json();
-
     if (!Array.isArray(items) || items.length === 0) return [];
-
-    // Actualizar timestamp del último item recibido
     const maxModified = Math.max(...items.map(i => parseFloat(i.modified || 0)));
     if (maxModified > 0) {
         lastSyncTimes[collection] = maxModified;
         await browser.storage.local.set({ lastSyncTimes });
     }
-
     return Promise.all(items.map(bso => decryptBsoPayload(bso, encryptionKey)));
 }
 
-/**
- * Fetch a large collection in paginated chunks of 500 items.
- * Returns all items (up to maxFetch). Combina con delta sync si hay lastSyncTimes.
- */
-async function fetchCollectionPaginated(collectionName, maxFetch = 10000) {
-    if (!authState.token) return [];
-
-    let allItems = [];
-    let offset = 0;
-    const limit = 500;
-
-    while (true) {
-        let url = `${authState.serverUrl}/api/ext/storage/${collectionName}?offset=${offset}&limit=${limit}`;
-        if (lastSyncTimes[collectionName]) {
-            url += `&newer=${lastSyncTimes[collectionName]}`;
-        }
-
-        const response = await fetch(url, { headers: authHeaders() });
-        if (!response.ok) break;
-
-        const data = await response.json();
-        // El backend devuelve {items, nextOffset} cuando se especifica limit
-        const pageItems = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
-        allItems = allItems.concat(pageItems);
-
-        if (!data.nextOffset || allItems.length >= maxFetch) {
-            break;
-        }
-        offset = data.nextOffset;
-    }
-
-    // Actualizar timestamp del último item recibido
-    if (allItems.length > 0) {
-        const maxModified = Math.max(...allItems.map(i => parseFloat(i.modified || 0)));
-        if (maxModified > 0) {
-            lastSyncTimes[collectionName] = maxModified;
-            await browser.storage.local.set({ lastSyncTimes });
-        }
-    }
-
-    return Promise.all(allItems.map(bso => decryptBsoPayload(bso, encryptionKey)));
-}
-
-/**
- * Upload BSOs to a collection on the sync server.
- * Each payload is encrypted with AES-GCM-256 before transit.
- * Large arrays are split into chunks of BATCH_UPLOAD_CHUNK_SIZE to stay
- * within the server's per-request batch limit.
- * Throws on any non-OK HTTP response so callers can detect failures and
- * avoid advancing their lastSync timestamp for a failed batch.
- */
 const BATCH_UPLOAD_CHUNK_SIZE = 100;
 
 async function uploadBsos(collection, bsos) {
     const uid = authState.user?.id;
     if (!uid || bsos.length === 0) return;
-
-    // Last-write-wins dedupe by id to avoid duplicate conflict keys in one batch.
+    if (!encryptionKey) {
+        throw new Error('Encryption key not initialized — refusing to upload unencrypted data');
+    }
     const dedupedBsos = Array.from(new Map(bsos.map(bso => [bso.id, bso])).values());
-
-    // Upload in chunks to respect the server's per-request batch limit.
     for (let i = 0; i < dedupedBsos.length; i += BATCH_UPLOAD_CHUNK_SIZE) {
         const rawChunk = dedupedBsos.slice(i, i + BATCH_UPLOAD_CHUNK_SIZE);
-        // Encrypt chunk-by-chunk to avoid long blocking CPU/memory spikes.
-        const chunk = encryptionKey
-            ? await Promise.all(rawChunk.map(async bso => ({
-                ...bso,
-                payload: await encryptPayload(bso.payload, encryptionKey),
-            })))
-            : rawChunk;
+        const chunk = await Promise.all(rawChunk.map(async bso => ({
+            ...bso,
+            payload: await encryptPayload(bso.payload, encryptionKey),
+        })));
         const response = await fetch(`${authState.serverUrl}/api/ext/storage/${collection}`, {
             method: 'POST',
             headers: { ...authHeaders(), 'Content-Type': 'application/json' },
@@ -954,9 +856,7 @@ async function uploadBsos(collection, bsos) {
         if (!response.ok) {
             const errBody = await response.json().catch(() => null);
             throw new Error(
-                `Upload to '${collection}' failed (HTTP ${response.status}): ${
-                    errBody?.message ?? 'unknown error'
-                }`
+                `Upload to '${collection}' failed (HTTP ${response.status}): ${errBody?.message ?? 'unknown error'}`
             );
         }
     }
@@ -964,136 +864,71 @@ async function uploadBsos(collection, bsos) {
 
 // ─── Device Pairing ─────────────────────────────────────────────────────
 
-/**
- * Generate a pairing token for connecting another device.
- */
 async function handleGeneratePairingToken() {
     if (!authState.token) throw new Error('Not logged in');
-
     const response = await fetch(`${authState.serverUrl}/api/ext/pair`, {
-        method: 'POST',
-        headers: authHeaders(),
+        method: 'POST', headers: authHeaders(),
     });
-
     if (!response.ok) throw new Error('Failed to generate pairing token');
-
     const serverResult = await response.json();
-    // Include the current encryption key so the pairing device can adopt it
-    // and read all existing data without a separate key-exchange step.
     const encKeyB64 = encryptionKey ? await exportKeyBase64(encryptionKey) : null;
     return { ...serverResult, encryption_key_b64: encKeyB64 };
 }
 
-/**
- * Redeem a pairing token from another device.
- */
 async function handleRedeemPairingToken(data) {
     const { pairingToken, serverUrl, encryptionKey: incomingKey } = data;
     const server = serverUrl || authState.serverUrl;
-
-    const browserInfo = await browser.runtime.getBrowserInfo().catch(() => ({
-        name: 'Midori', version: '0',
-    }));
-
+    const deviceName = await getDeviceName();
     const response = await fetch(`${server}/api/ext/pair/redeem`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({
             pairing_token: pairingToken,
-            device_name: `${browserInfo.name} on ${navigator.platform}`,
+            device_name: deviceName,
             device_type: 'desktop',
         }),
     });
-
     if (!response.ok) {
         const err = await response.json();
         throw new Error(err.message || 'Pairing failed');
     }
-
     const result = await response.json();
-
-    // If the pairing includes an encryption key from the other device, adopt
-    // it so both devices share the same key and can read each other's data.
     if (incomingKey) {
         await browser.storage.local.set({ encryptionKey: incomingKey });
     }
-
-    authState = {
-        token: result.token,
-        user: result.user,
-        device: result.device,
-        serverUrl: server,
-    };
-
+    authState = { token: result.token, user: result.user, device: result.device, serverUrl: server };
     await browser.storage.local.set({ auth: authState, serverUrl: server });
-
-    // Load the shared key (or generate a new one if none was provided).
     await initEncryptionKey();
-
     const stored = await browser.storage.local.get('syncSettings');
     setupSyncAlarms(stored.syncSettings || {});
     updateBadge('on');
 
+    if (encryptionKey) {
+        try {
+            await restoreFromServer();
+        } catch (e) {
+            console.warn('[Midori Sync] Data restore after pairing failed:', e);
+        }
+    }
+
     return { success: true, user: result.user, device: result.device };
 }
 
-/**
- * Remove a device.
- */
-async function handleRemoveDevice(data) {
+async function handleRemoveDevice() {
     if (!authState.token) throw new Error('Not logged in');
-
-    // The web dashboard handles this — return info for now
     return { success: true };
 }
 
-/**
- * Export the current AES-GCM-256 encryption key as a base64 string.
- * Used by the options page to display/copy the key for manual transfer.
- */
-async function handleExportEncryptionKey() {
-    if (!encryptionKey) throw new Error('No encryption key loaded');
-    return { key: await exportKeyBase64(encryptionKey) };
-}
+// ─── Alarms ─────────────────────────────────────────────────────────────
 
-/**
- * Import an AES-GCM-256 encryption key from a base64 string.
- * Replaces the current key and schedules a full re-encryption migration.
- */
-async function handleImportEncryptionKey(data) {
-    const { keyBase64 } = data;
-    if (!keyBase64) throw new Error('Missing keyBase64');
-    // Validate by importing before persisting.
-    const imported = await importKeyBase64(keyBase64);
-    await browser.storage.local.set({
-        encryptionKey: keyBase64,
-        encryptionMigrationNeeded: true,
-    });
-    encryptionKey = imported;
-    // Reset delta sync so migration re-downloads everything for re-encryption.
-    lastSyncTimes = { bookmarks: 0, history: 0, tabs: 0, passwords: 0 };
-    await browser.storage.local.set({ lastSyncTimes });
-    console.log('[Midori Sync] Encryption key imported. Migration scheduled.');
-    return { success: true };
-}
-
-// ─── Alarm Scheduling ───────────────────────────────────────────────────
-
-/**
- * Setup periodic sync alarms based on user settings.
- */
 function setupSyncAlarms(settings) {
     browser.alarms.clearAll();
-
     for (const [type, defaults] of Object.entries(SYNC_TYPES)) {
         const config = settings[type] || {};
         const enabled = config.enabled ?? defaults.enabled;
         const interval = config.interval ?? defaults.interval;
-
         if (enabled && authState.token) {
-            browser.alarms.create(`sync-${type}`, {
-                periodInMinutes: interval,
-            });
+            browser.alarms.create(`sync-${type}`, { periodInMinutes: interval });
         }
     }
 }
@@ -1107,13 +942,8 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
 
 // ─── Debounced Event Listeners ──────────────────────────────────────────
 
-/**
- * Debounced sync: coalesces rapid consecutive changes into a single sync call.
- */
 function debouncedSync(type, delayMs = 500) {
-    if (syncTimeouts[type]) {
-        clearTimeout(syncTimeouts[type]);
-    }
+    if (syncTimeouts[type]) clearTimeout(syncTimeouts[type]);
     syncTimeouts[type] = setTimeout(() => {
         delete syncTimeouts[type];
         if (authState.token) {
@@ -1124,59 +954,35 @@ function debouncedSync(type, delayMs = 500) {
     }, delayMs);
 }
 
-// Bookmark changes → debounce 2s (coalesce rapid folder/title edits)
 browser.bookmarks.onCreated.addListener(() => debouncedSync('bookmarks', 2000));
 browser.bookmarks.onChanged.addListener(() => debouncedSync('bookmarks', 2000));
 browser.bookmarks.onRemoved.addListener(() => debouncedSync('bookmarks', 2000));
 browser.bookmarks.onMoved.addListener(() => debouncedSync('bookmarks', 2000));
-
-// History visits → debounce 5s (high frequency, batch window)
 browser.history.onVisited.addListener(() => debouncedSync('history', 5000));
 
-// ─── IndexedDB Storage ──────────────────────────────────────────────────
+// ─── IndexedDB ──────────────────────────────────────────────────────────
 
 let _idb = null;
 
-/**
- * Abre (o retorna cached) la base de datos IndexedDB para almacenamiento de datos grandes.
- */
 async function initializeIndexedDB() {
     if (_idb) return _idb;
-
     return new Promise((resolve, reject) => {
         const req = indexedDB.open('midori-sync', 1);
-
         req.onupgradeneeded = (e) => {
             const db = e.target.result;
-            if (!db.objectStoreNames.contains('history')) {
-                db.createObjectStore('history', { keyPath: 'url' });
-            }
-            if (!db.objectStoreNames.contains('bookmarks')) {
-                db.createObjectStore('bookmarks', { keyPath: 'id' });
-            }
+            if (!db.objectStoreNames.contains('history')) db.createObjectStore('history', { keyPath: 'url' });
+            if (!db.objectStoreNames.contains('bookmarks')) db.createObjectStore('bookmarks', { keyPath: 'id' });
         };
-
-        req.onsuccess = () => {
-            _idb = req.result;
-            resolve(_idb);
-        };
+        req.onsuccess = () => { _idb = req.result; resolve(_idb); };
         req.onerror = () => reject(req.error);
     });
 }
 
-/**
- * Almacena items de historial en IndexedDB en lugar de storage.local.
- * Evita llenar el límite de 10MB de storage.local con historiales grandes.
- */
 async function storeHistory(items) {
     const db = await initializeIndexedDB();
     const tx = db.transaction(['history'], 'readwrite');
     const store = tx.objectStore('history');
-
-    for (const item of items) {
-        store.put(item);
-    }
-
+    for (const item of items) store.put(item);
     return new Promise((resolve, reject) => {
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
@@ -1185,38 +991,21 @@ async function storeHistory(items) {
 
 // ─── Utilities ──────────────────────────────────────────────────────────
 
-/**
- * Build the Authorization headers for API calls.
- */
 function authHeaders() {
-    return {
-        Authorization: `Bearer ${authState.token}`,
-        Accept: 'application/json',
-    };
+    return { Authorization: `Bearer ${authState.token}`, Accept: 'application/json' };
 }
 
-/**
- * Fetch storage quota info from the server and cache it locally.
- * Non-critical: errors are silently ignored.
- */
 async function refreshStorageInfo() {
     if (!authState.token) return;
     try {
-        const response = await fetch(`${authState.serverUrl}/api/ext/storage/info`, {
-            headers: authHeaders(),
-        });
+        const response = await fetch(`${authState.serverUrl}/api/ext/storage/info`, { headers: authHeaders() });
         if (response.ok) {
             const data = await response.json();
             await browser.storage.local.set({ storageInfo: data });
         }
-    } catch (e) {
-        // Non-critical, ignore
-    }
+    } catch (e) { /* non-critical */ }
 }
 
-/**
- * Simple string hash for generating deterministic IDs.
- */
 function hashString(str) {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
@@ -1227,9 +1016,6 @@ function hashString(str) {
     return Math.abs(hash).toString(36);
 }
 
-/**
- * Update the browser action badge.
- */
 function updateBadge(state) {
     if (state === 'on') {
         browser.browserAction.setBadgeText({ text: '✓' });
