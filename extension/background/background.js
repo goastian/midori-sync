@@ -1007,13 +1007,14 @@ async function refreshStorageInfo() {
 }
 
 function hashString(str) {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-        const ch = str.charCodeAt(i);
-        hash = ((hash << 5) - hash) + ch;
-        hash |= 0;
+    // BLAKE2b-128 (libsodium, sync). Collision-resistant replacement for the
+    // previous DJB2 32-bit hash. Requires sodium.ready; callers run after
+    // crypto_.init() so sodium is available.
+    if (typeof sodium === 'undefined' || !sodium.crypto_generichash) {
+        throw new Error('libsodium not ready: cannot hash URL');
     }
-    return Math.abs(hash).toString(36);
+    const digest = sodium.crypto_generichash(16, sodium.from_string(str));
+    return sodium.to_hex(digest);
 }
 
 function updateBadge(state) {

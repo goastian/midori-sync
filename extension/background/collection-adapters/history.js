@@ -61,14 +61,13 @@ class HistoryAdapter {
     }
 
     _hashUrl(url) {
-        // Simple hash for URL-based record ID
-        let hash = 0;
-        for (let i = 0; i < url.length; i++) {
-            const chr = url.charCodeAt(i);
-            hash = ((hash << 5) - hash) + chr;
-            hash |= 0;
+        // BLAKE2b-128 via libsodium. Sync API; requires sodium.ready, which is
+        // awaited during crypto initialization before any sync operation runs.
+        if (typeof sodium === 'undefined' || !sodium.crypto_generichash) {
+            throw new Error('libsodium not ready: cannot hash URL');
         }
-        return 'h_' + Math.abs(hash).toString(36);
+        const digest = sodium.crypto_generichash(16, sodium.from_string(url));
+        return 'h_' + sodium.to_hex(digest);
     }
 }
 
