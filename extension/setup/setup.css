@@ -1,0 +1,219 @@
+/* Midori Sync — Seed Phrase Setup Styles */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1118;
+    color: #e5e7eb;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 40px 16px;
+}
+
+.container {
+    max-width: 560px;
+    width: 100%;
+}
+
+header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 32px;
+}
+
+header h1 {
+    font-size: 24px;
+    font-weight: 600;
+    color: #f9fafb;
+}
+
+.card {
+    background: #1a1d2e;
+    border: 1px solid #2a2d3e;
+    border-radius: 12px;
+    padding: 32px;
+}
+
+.card-success {
+    text-align: center;
+}
+
+.shield-icon, .success-icon {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #f9fafb;
+    text-align: center;
+}
+
+.desc {
+    color: #9ca3af;
+    font-size: 14px;
+    line-height: 1.6;
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+.hint {
+    color: #6b7280;
+    font-size: 13px;
+    margin-top: 12px;
+    text-align: center;
+}
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.btn-lg {
+    padding: 14px 24px;
+    font-size: 15px;
+    width: 100%;
+}
+
+.btn-primary {
+    background: #22c55e;
+    color: #fff;
+}
+.btn-primary:hover:not(:disabled) { background: #16a34a; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-secondary {
+    background: #2a2d3e;
+    color: #e5e7eb;
+    border: 1px solid #3a3d4e;
+}
+.btn-secondary:hover { background: #3a3d4e; }
+
+.actions-vertical {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.actions-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+}
+.actions-row .btn-primary { flex: 1; }
+
+/* Warning banner */
+.warning-banner {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    background: #422006;
+    border: 1px solid #854d0e;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 24px;
+}
+.warning-banner svg { flex-shrink: 0; margin-top: 2px; }
+.warning-banner strong { color: #fbbf24; display: block; margin-bottom: 4px; font-size: 14px; }
+.warning-banner p { color: #fcd34d; font-size: 13px; line-height: 1.5; margin: 0; }
+
+/* Seed phrase grid */
+.seed-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.seed-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #0f1118;
+    border: 1px solid #2a2d3e;
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+
+.seed-num {
+    color: #6b7280;
+    font-size: 12px;
+    font-weight: 600;
+    min-width: 18px;
+}
+
+.seed-word {
+    color: #f9fafb;
+    font-size: 15px;
+    font-weight: 500;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+/* Input grid for recovery */
+.input-cell {
+    padding: 6px 10px;
+}
+
+.seed-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #f9fafb;
+    font-size: 14px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    outline: none;
+    width: 100%;
+}
+.seed-input::placeholder { color: #4b5563; }
+
+/* Checkbox */
+.checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 16px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #9ca3af;
+    line-height: 1.5;
+}
+.checkbox-row input[type="checkbox"] {
+    margin-top: 3px;
+    accent-color: #22c55e;
+    flex-shrink: 0;
+}
+
+/* Error message */
+.error-msg {
+    background: #450a0a;
+    border: 1px solid #991b1b;
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: #fca5a5;
+    font-size: 13px;
+    margin-top: 12px;
+}
+
+.hidden { display: none !important; }
+
+/* Responsive */
+@media (max-width: 480px) {
+    .seed-grid { grid-template-columns: repeat(2, 1fr); }
+    .card { padding: 20px; }
+}

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Midori Sync — Encryption Setup</title>
+    <link rel="stylesheet" href="setup.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <svg class="logo" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            <h1>Encryption Setup</h1>
+        </header>
+
+        <!-- Step 1: Choose action -->
+        <div id="step-choose" class="step">
+            <div class="card">
+                <div class="shield-icon">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="1.5">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        <path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </div>
+                <h2>Protect your data</h2>
+                <p class="desc">Your data is encrypted end-to-end. The server never sees your content. You need a <strong>seed phrase</strong> (12 words) to recover your data if you change devices or reinstall the browser.</p>
+
+                <div class="actions-vertical">
+                    <button id="btn-generate" class="btn btn-primary btn-lg">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                        Generate new seed phrase
+                    </button>
+                    <button id="btn-recover" class="btn btn-secondary btn-lg">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                        I already have a seed phrase
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2a: Show generated seed phrase -->
+        <div id="step-show" class="step hidden">
+            <div class="card">
+                <div class="warning-banner">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    <div>
+                        <strong>Write these words down!</strong>
+                        <p>This is the only way to recover your encrypted data. Store them in a safe place. Never share them.</p>
+                    </div>
+                </div>
+
+                <div id="seed-grid" class="seed-grid"></div>
+
+                <div class="actions-row">
+                    <button id="btn-copy" class="btn btn-secondary">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                        Copy
+                    </button>
+                    <button id="btn-confirm" class="btn btn-primary" disabled>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                        I've saved my seed phrase
+                    </button>
+                </div>
+
+                <label class="checkbox-row">
+                    <input type="checkbox" id="chk-confirm">
+                    <span>I understand that if I lose this seed phrase, I won't be able to recover my encrypted data.</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Step 2b: Enter existing seed phrase -->
+        <div id="step-recover" class="step hidden">
+            <div class="card">
+                <h2>Recover with seed phrase</h2>
+                <p class="desc">Enter the 12 words from your backup to recover your encryption key.</p>
+
+                <div id="recover-grid" class="seed-grid input-grid"></div>
+
+                <div id="recover-error" class="error-msg hidden"></div>
+
+                <div class="actions-row">
+                    <button id="btn-back-recover" class="btn btn-secondary">Back</button>
+                    <button id="btn-submit-recover" class="btn btn-primary" disabled>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                        Recover
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Done -->
+        <div id="step-done" class="step hidden">
+            <div class="card card-success">
+                <div class="success-icon">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                </div>
+                <h2>Encryption is active</h2>
+                <p class="desc">Your browser data is now encrypted end-to-end. Sync will begin automatically.</p>
+                <p class="hint">You can close this tab.</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="setup.js"></script>
+</body>
+</html>
