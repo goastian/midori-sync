@@ -21,6 +21,7 @@
         "scripts": [
             "lib/sodium.js",
             "lib/wordlist.js",
+            "lib/ext-errors.js",
             "lib/midori-sync-crypto.js",
             "background/collection-adapters/bookmarks.js",
             "background/collection-adapters/history.js",
