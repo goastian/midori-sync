@@ -1,0 +1,7 @@
+Contact: mailto:contact@astian.org
+Expires: 2027-05-06T00:00:00.000Z
+Encryption: https://astian.org/.well-known/pgp-key.txt
+Preferred-Languages: en, es
+Canonical: https://sync.astian.org/.well-known/security.txt
+Policy: https://github.com/astian-org/midori-sync/blob/main/SECURITY.md
+Acknowledgments: https://github.com/astian-org/midori-sync/blob/main/CHANGELOG.md
