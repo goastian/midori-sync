@@ -75,7 +75,7 @@ class ExtDeviceController extends Controller
         // Revoke all sync sessions tied to this device, then drop the
         // device row. This invalidates any token still in use on it.
         \App\Models\SyncSession::where('user_id', $user->id)
-            ->where('device_id', $device->device_id)
+            ->where('device_id', $device->id)
             ->delete();
 
         $device->delete();

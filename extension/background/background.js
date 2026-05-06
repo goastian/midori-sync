@@ -1593,68 +1593,20 @@ async function handleImportConfig(data) {
 }
 
 // ─── Centralized HTTP Error Mapping ─────────────────────────────────────
-// Maps server responses to UI-friendly error codes. The intent is to
-// give the popup/options pages a stable contract instead of the raw
-// HTTP messages, so user-visible strings can be localized and styled.
-//
-//   401 -> token_expired
-//   403 -> { quota_exceeded, collection_disabled, forbidden }
-//   404 -> not_found
-//   412 -> precondition_failed (ETag mismatch)
-//   429 -> rate_limited
-//   5xx -> server_error
-//   network failures -> network
+// Implementation lives in `extension/lib/ext-errors.js` so it can be
+// unit-tested independently. The script is loaded via manifest.json
+// before this file, populating `globalThis.ExtErrors`.
 
 function _classifyExtError(status, body) {
-    const message = (body && (body.message || body.error)) || '';
-    if (status === 0) return { code: 'network', message: 'Network unavailable' };
-    if (status === 401) return { code: 'token_expired', message: 'Session expired. Please sign in again.' };
-    if (status === 403) {
-        const lc = message.toLowerCase();
-        if (lc.includes('quota')) return { code: 'quota_exceeded', message };
-        if (lc.includes('disabled') || lc.includes('collection')) {
-            return { code: 'collection_disabled', message: message || 'Collection disabled' };
-        }
-        return { code: 'forbidden', message: message || 'Forbidden' };
-    }
-    if (status === 404) return { code: 'not_found', message: message || 'Not found' };
-    if (status === 412) return { code: 'precondition_failed', message: message || 'Precondition failed' };
-    if (status === 429) return { code: 'rate_limited', message: message || 'Too many requests' };
-    if (status >= 500) return { code: 'server_error', message: message || `Server error (${status})` };
-    return { code: 'http_error', message: message || `HTTP ${status}` };
+    return globalThis.ExtErrors.classify(status, body);
 }
 
 /**
  * Fetch JSON with normalized error mapping. Throws an `Error` whose
- * `.code` carries one of the codes from `_classifyExtError`.
+ * `.code` carries one of the codes from `ExtErrors.classify`.
  */
 async function extFetchJson(url, options = {}) {
-    const { expectNoBody = false, ...fetchOptions } = options;
-    let response;
-    try {
-        response = await fetch(url, fetchOptions);
-    } catch (e) {
-        const err = new Error('Network unavailable');
-        err.code = 'network';
-        err.cause = e;
-        throw err;
-    }
-    if (!response.ok) {
-        let body = null;
-        try { body = await response.json(); } catch (_) { /* non-JSON */ }
-        const info = _classifyExtError(response.status, body);
-        const err = new Error(info.message);
-        err.code = info.code;
-        err.status = response.status;
-        throw err;
-    }
-    if (expectNoBody) return null;
-    if (response.status === 204) return null;
-    try {
-        return await response.json();
-    } catch (_) {
-        return null;
-    }
+    return globalThis.ExtErrors.extFetchJson(fetch, url, options);
 }
 
 // ─── Alarms ─────────────────────────────────────────────────────────────
