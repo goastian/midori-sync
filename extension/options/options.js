@@ -7,7 +7,8 @@ const $ = (sel) => document.querySelector(sel);
 const ALL_COLLECTIONS = [
     { id: 'bookmarks', name: 'Bookmarks', desc: 'Bookmark folders and links' },
     { id: 'history', name: 'History', desc: 'Browsing history' },
-    { id: 'open-tabs', name: 'Open Tabs', desc: 'Currently open tabs' },
+    { id: 'tabs', name: 'Open Tabs', desc: 'Currently open tabs' },
+    { id: 'passwords', name: 'Passwords', desc: 'Encrypted password vault' },
     { id: 'browser-settings', name: 'Browser Settings', desc: 'Homepage, new tab page' },
     { id: 'midori-tab', name: 'Midori Tab', desc: 'Widgets, themes, shortcuts' },
     { id: 'midori-privacy', name: 'Midori Privacy', desc: 'Filter lists, site toggles' },
@@ -412,6 +413,193 @@ loadConfig = async function() {
     await _origLoadConfig();
     await loadLockStatus();
     await pollRotationStatus();
+    await loadDevices();
 };
+
+// ─── Device Management ──────────────────────────────────────────────────
+
+/**
+ * Wrapper around `browser.runtime.sendMessage` that converts the
+ * `{ error, code }` shape returned by background handlers into a thrown
+ * `Error` carrying `.code`, so the rest of the page can use try/catch.
+ */
+async function sendBg(type, data) {
+    const res = await browser.runtime.sendMessage({ type, data });
+    if (res && res.error) {
+        const err = new Error(res.error);
+        if (res.code) err.code = res.code;
+        throw err;
+    }
+    return res;
+}
+
+function formatRelative(iso) {
+    if (!iso) return 'never';
+    const diff = Date.now() - new Date(iso).getTime();
+    if (diff < 60_000) return 'just now';
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+    return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+async function loadDevices() {
+    const list = $('#devices-list');
+    const empty = $('#devices-empty');
+    if (!list) return;
+    try {
+        const result = await sendBg('listDevices');
+        const devices = result?.devices || [];
+        list.innerHTML = '';
+        if (devices.length === 0) {
+            const p = document.createElement('p');
+            p.className = 'card-desc';
+            p.textContent = 'No devices.';
+            list.appendChild(p);
+            return;
+        }
+        const state = await browser.runtime.sendMessage({ type: 'getState' });
+        const currentId = state?.device?.id || null;
+        for (const dev of devices) {
+            const row = document.createElement('div');
+            row.className = 'device-row';
+            const isCurrent = dev.id === currentId;
+            // Build the row using DOM nodes (no innerHTML w/ device data)
+            // to avoid XSS via attacker-controlled device names.
+            const info = document.createElement('div');
+            info.className = 'device-info';
+            const name = document.createElement('div');
+            name.className = 'device-name';
+            name.textContent = dev.name || '(unnamed device)';
+            if (isCurrent) {
+                const badge = document.createElement('span');
+                badge.className = 'device-badge';
+                badge.textContent = ' (this device)';
+                name.appendChild(badge);
+            }
+            const meta = document.createElement('div');
+            meta.className = 'device-meta';
+            meta.textContent = `${dev.type || 'desktop'} · last sync ${formatRelative(dev.last_sync_at)}`;
+            info.appendChild(name);
+            info.appendChild(meta);
+
+            const actions = document.createElement('div');
+            actions.className = 'device-actions';
+            const renameBtn = document.createElement('button');
+            renameBtn.className = 'btn btn-sm btn-secondary';
+            renameBtn.textContent = 'Rename';
+            renameBtn.addEventListener('click', () => onRenameDevice(dev));
+            const revokeBtn = document.createElement('button');
+            revokeBtn.className = 'btn btn-sm btn-danger';
+            revokeBtn.textContent = 'Revoke';
+            revokeBtn.addEventListener('click', () => onRevokeDevice(dev));
+            actions.appendChild(renameBtn);
+            actions.appendChild(revokeBtn);
+
+            row.appendChild(info);
+            row.appendChild(actions);
+            list.appendChild(row);
+        }
+    } catch (e) {
+        list.innerHTML = '';
+        const p = document.createElement('p');
+        p.className = 'card-desc';
+        p.textContent = mapErrorToMessage(e);
+        list.appendChild(p);
+    }
+}
+
+async function onRenameDevice(device) {
+    const next = prompt('New device name:', device.name || '');
+    if (!next || next === device.name) return;
+    try {
+        await sendBg('renameDevice', { deviceId: device.id, name: next.trim() });
+        showToast('Device renamed');
+        await loadDevices();
+    } catch (e) {
+        showToast(mapErrorToMessage(e));
+    }
+}
+
+async function onRevokeDevice(device) {
+    if (!confirm(`Revoke "${device.name}"? Its sync session will be invalidated immediately.`)) return;
+    try {
+        await sendBg('revokeDevice', { deviceId: device.id });
+        showToast('Device revoked');
+        await loadDevices();
+    } catch (e) {
+        showToast(mapErrorToMessage(e));
+    }
+}
+
+$('#btn-refresh-devices')?.addEventListener('click', () => loadDevices());
+
+// ─── Backup / Restore ───────────────────────────────────────────────────
+
+$('#btn-export-config')?.addEventListener('click', async () => {
+    try {
+        const data = await sendBg('exportConfig');
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `midori-sync-config-${Date.now()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('Configuration exported');
+    } catch (e) {
+        showToast(mapErrorToMessage(e));
+    }
+});
+
+$('#btn-import-config')?.addEventListener('click', () => {
+    $('#input-import-config').click();
+});
+
+$('#input-import-config')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+        const text = await file.text();
+        const payload = JSON.parse(text);
+        await sendBg('importConfig', payload);
+        showToast('Configuration imported');
+        await loadConfig();
+    } catch (err) {
+        showToast(`Import failed: ${err?.message || err}`);
+    }
+});
+
+// ─── Server Data Wipe ───────────────────────────────────────────────────
+
+$('#btn-wipe-server')?.addEventListener('click', async () => {
+    const confirmText = prompt('This will permanently delete ALL your data on the server (records, collections, crypto bundle). Type DELETE to confirm:');
+    if (confirmText !== 'DELETE') {
+        showToast('Wipe cancelled');
+        return;
+    }
+    try {
+        await sendBg('wipeServerData');
+        showToast('Server data deleted');
+    } catch (e) {
+        showToast(mapErrorToMessage(e));
+    }
+});
+
+// ─── Error code -> human message ────────────────────────────────────────
+
+function mapErrorToMessage(err) {
+    const code = err?.code || (err?.message && /\b(401|403|429)\b/.test(err.message) ? null : null);
+    const msg = err?.message || String(err);
+    if (code === 'token_expired') return 'Session expired. Sign in again from the popup.';
+    if (code === 'quota_exceeded') return 'Storage quota exceeded.';
+    if (code === 'rate_limited') return 'Too many requests. Try again in a moment.';
+    if (code === 'collection_disabled') return 'Collection disabled by the server.';
+    if (code === 'network') return 'Network unavailable. Check your connection.';
+    if (code === 'server_error') return 'Server error. Please retry later.';
+    return msg;
+}
 
 loadConfig();

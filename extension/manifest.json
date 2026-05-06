@@ -59,5 +59,7 @@
             "id": "sync@midori.astian.org",
             "strict_min_version": "91.0"
         }
-    }
+    },
+
+    "content_security_policy": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:8000 https://sync.astian.org https://accounts.astian.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; default-src 'self'"
 }

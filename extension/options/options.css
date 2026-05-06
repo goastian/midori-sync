@@ -325,3 +325,51 @@ select:focus {
 .btn-secondary:hover {
     background: var(--color-border);
 }
+
+/* Devices list */
+.devices-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.device-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface, #fff);
+}
+
+.device-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+}
+
+.device-name {
+    font-weight: 600;
+    color: var(--color-text);
+    word-break: break-word;
+}
+
+.device-badge {
+    font-weight: 400;
+    font-size: 0.85em;
+    color: var(--color-success, #22c55e);
+}
+
+.device-meta {
+    font-size: 0.85em;
+    color: var(--color-muted, #6b7280);
+}
+
+.device-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}

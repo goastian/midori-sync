@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' http://localhost:8000 https://sync.astian.org https://accounts.astian.org; object-src 'none'; base-uri 'self'; form-action 'self'">
     <title>Midori Sync</title>
     <link rel="stylesheet" href="popup.css">
 </head>
@@ -106,7 +107,17 @@
                 <h3>Sync Status</h3>
                 <button id="sync-all-btn" class="btn btn-sm btn-primary">Sync Now</button>
             </div>
+            <div id="sync-error-banner" class="error hidden" style="margin-bottom:8px"></div>
             <div id="sync-items" class="sync-list"></div>
+        </div>
+
+        <!-- Connected Devices -->
+        <div class="section">
+            <div class="section-header">
+                <h3>Devices</h3>
+                <button id="devices-refresh-btn" class="btn btn-sm btn-secondary">↻</button>
+            </div>
+            <div id="devices-mini-list" class="devices-mini"></div>
         </div>
 
         <!-- Actions -->

@@ -741,3 +741,29 @@ h3 {
 .lock-badge:hover {
     background: var(--color-surface);
 }
+
+/* Connected devices (popup) */
+.devices-mini {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.85em;
+}
+
+.device-mini-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 6px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.03);
+}
+
+.device-mini-name.current {
+    font-weight: 600;
+    color: #22c55e;
+}
+
+.device-mini-meta {
+    color: #6b7280;
+    font-size: 0.9em;
+}

@@ -110,6 +110,77 @@ function showMainView(state) {
 
     // Sync items
     renderSyncItems(state.syncTypes, state.syncSettings, state.lastSync);
+
+    // Connected devices (best-effort, non-blocking)
+    loadDevicesMini().catch(() => {});
+}
+
+// ─── Connected Devices (popup) ──────────────────────────────────────────
+
+async function loadDevicesMini() {
+    const list = document.getElementById('devices-mini-list');
+    if (!list) return;
+    list.textContent = 'Loading…';
+    try {
+        const result = await sendMessage('listDevices');
+        if (result?.error) {
+            showSyncError(mapSyncError(result));
+            list.textContent = '—';
+            return;
+        }
+        const devices = result?.devices || [];
+        list.innerHTML = '';
+        if (devices.length === 0) {
+            list.textContent = 'No other devices.';
+            return;
+        }
+        const state = await sendMessage('getState');
+        const currentId = state?.device?.id || null;
+        for (const dev of devices) {
+            const row = document.createElement('div');
+            row.className = 'device-mini-row';
+            const name = document.createElement('span');
+            name.className = 'device-mini-name';
+            name.textContent = dev.name || '(unnamed)';
+            if (dev.id === currentId) {
+                name.textContent += ' (this)';
+                name.classList.add('current');
+            }
+            const meta = document.createElement('span');
+            meta.className = 'device-mini-meta';
+            meta.textContent = dev.last_sync_at ? formatTime(dev.last_sync_at) : 'never';
+            row.appendChild(name);
+            row.appendChild(meta);
+            list.appendChild(row);
+        }
+    } catch (err) {
+        list.textContent = mapSyncError({ error: err.message, code: err.code });
+    }
+}
+
+function showSyncError(message) {
+    const banner = document.getElementById('sync-error-banner');
+    if (!banner) return;
+    if (!message) {
+        banner.classList.add('hidden');
+        banner.textContent = '';
+        return;
+    }
+    banner.textContent = message;
+    banner.classList.remove('hidden');
+}
+
+function mapSyncError(res) {
+    if (!res) return '';
+    const code = res.code;
+    const msg = res.error || '';
+    if (code === 'token_expired') return 'Session expired. Please sign in again.';
+    if (code === 'quota_exceeded') return 'Storage quota exceeded.';
+    if (code === 'rate_limited') return 'Too many requests. Slow down sync.';
+    if (code === 'collection_disabled') return 'A collection is disabled on the server.';
+    if (code === 'network') return 'Network unavailable.';
+    if (code === 'server_error') return 'Server error. Try again later.';
+    return msg;
 }
 
 /**
@@ -298,14 +369,21 @@ function setupEventListeners() {
 
         try {
             await sendMessage('syncNow');
+            showSyncError('');
             showToast('✓ All data synced successfully!', 2000, 'success');
         } catch (err) {
+            showSyncError(mapSyncError({ error: err.message, code: err.code }));
             showToast(`✗ Sync failed: ${err.message}`, 3000, 'error');
         } finally {
             setLoading(btn, false);
             const state = await sendMessage('getState');
             renderSyncItems(state.syncTypes, state.syncSettings, state.lastSync);
         }
+    });
+
+    // Refresh devices list in popup
+    document.getElementById('devices-refresh-btn')?.addEventListener('click', () => {
+        loadDevicesMini().catch(() => {});
     });
 
     // Settings button — opens settings in a full new tab

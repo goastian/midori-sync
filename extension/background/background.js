@@ -802,6 +802,12 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         redeemPairingToken: handleRedeemPairingToken,
         getProfile: handleGetProfile,
         removeDevice: handleRemoveDevice,
+        listDevices: handleListDevices,
+        renameDevice: handleRenameDevice,
+        revokeDevice: handleRevokeDevice,
+        wipeServerData: handleWipeServerData,
+        exportConfig: handleExportConfig,
+        importConfig: handleImportConfig,
         generateSeedPhrase: handleGenerateSeedPhrase,
         completeSeedPhraseSetup: handleCompleteSeedPhraseSetup,
         recoverWithSeedPhrase: handleRecoverWithSeedPhrase,
@@ -828,7 +834,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // session because they represent active interaction with the UI.
         try { noteUserActivity(); } catch (_) { /* best effort */ }
         handler(msg.data).then(sendResponse).catch(err => {
-            sendResponse({ error: err.message });
+            sendResponse({ error: err.message, code: err.code || null });
         });
         return true;
     }
@@ -1487,6 +1493,168 @@ async function handleRedeemPairingToken(data) {
 async function handleRemoveDevice() {
     if (!authState.token) throw new Error('Not logged in');
     return { success: true };
+}
+
+// ─── Device Management & Server Wipe ────────────────────────────────────
+// Thin wrappers around `/api/ext/devices*` and `/api/ext/data`. They use
+// `extFetchJson()` so the UI receives normalized error codes for the
+// well-known failure modes (`unauthorized`, `forbidden`, `quota_exceeded`,
+// `rate_limited`, `network`, `not_found`, ...).
+
+async function handleListDevices() {
+    if (!authState.token) throw new Error('Not logged in');
+    const data = await extFetchJson(`${authState.serverUrl}/api/ext/devices`, {
+        headers: authHeaders(),
+    });
+    return data;
+}
+
+async function handleRenameDevice(data) {
+    if (!authState.token) throw new Error('Not logged in');
+    const { deviceId, name } = data || {};
+    if (!deviceId || !name) throw new Error('deviceId and name are required');
+    return extFetchJson(`${authState.serverUrl}/api/ext/devices/${encodeURIComponent(deviceId)}`, {
+        method: 'PATCH',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+    });
+}
+
+async function handleRevokeDevice(data) {
+    if (!authState.token) throw new Error('Not logged in');
+    const { deviceId } = data || {};
+    if (!deviceId) throw new Error('deviceId is required');
+    await extFetchJson(`${authState.serverUrl}/api/ext/devices/${encodeURIComponent(deviceId)}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+        expectNoBody: true,
+    });
+    // If the user revoked the current device, log out locally as well.
+    if (authState.device && authState.device.id === deviceId) {
+        await handleLogout();
+    }
+    return { success: true };
+}
+
+async function handleWipeServerData() {
+    if (!authState.token) throw new Error('Not logged in');
+    await extFetchJson(`${authState.serverUrl}/api/ext/data`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+    });
+    // Reset incremental cursors so the next sync re-pulls a clean state.
+    lastSyncTimes = { bookmarks: 0, history: 0, tabs: 0, passwords: 0 };
+    await browser.storage.local.set({ lastSyncTimes });
+    return { success: true };
+}
+
+// ─── Config Export / Import ─────────────────────────────────────────────
+// Exports a JSON snapshot of the user-facing extension configuration so
+// it can be backed up or moved between profiles. The seed phrase and
+// derived encryption key are intentionally excluded — the user is
+// responsible for transporting them via the seed-phrase recovery flow.
+
+const EXPORTABLE_KEYS = ['syncSettings', 'serverUrl', 'lastSync', 'lastSyncTimes'];
+const EXPORT_VERSION = 1;
+
+async function handleExportConfig() {
+    const stored = await browser.storage.local.get(EXPORTABLE_KEYS);
+    return {
+        version: EXPORT_VERSION,
+        exportedAt: new Date().toISOString(),
+        config: {
+            syncSettings: stored.syncSettings || {},
+            serverUrl: stored.serverUrl || authState.serverUrl,
+            lastSync: stored.lastSync || {},
+            lastSyncTimes: stored.lastSyncTimes || {},
+        },
+    };
+}
+
+async function handleImportConfig(data) {
+    const payload = data || {};
+    if (!payload || typeof payload !== 'object') {
+        throw new Error('Invalid configuration payload');
+    }
+    if (payload.version !== EXPORT_VERSION) {
+        throw new Error(`Unsupported config version: ${payload.version}`);
+    }
+    const cfg = payload.config || {};
+    const toStore = {};
+    if (cfg.syncSettings && typeof cfg.syncSettings === 'object') toStore.syncSettings = cfg.syncSettings;
+    if (typeof cfg.serverUrl === 'string' && cfg.serverUrl) toStore.serverUrl = cfg.serverUrl.replace(/\/+$/, '');
+    if (cfg.lastSync && typeof cfg.lastSync === 'object') toStore.lastSync = cfg.lastSync;
+    if (cfg.lastSyncTimes && typeof cfg.lastSyncTimes === 'object') toStore.lastSyncTimes = cfg.lastSyncTimes;
+    await browser.storage.local.set(toStore);
+    if (toStore.serverUrl) authState.serverUrl = toStore.serverUrl;
+    if (toStore.lastSyncTimes) lastSyncTimes = { ...lastSyncTimes, ...toStore.lastSyncTimes };
+    if (toStore.syncSettings) setupSyncAlarms(toStore.syncSettings);
+    return { success: true, imported: Object.keys(toStore) };
+}
+
+// ─── Centralized HTTP Error Mapping ─────────────────────────────────────
+// Maps server responses to UI-friendly error codes. The intent is to
+// give the popup/options pages a stable contract instead of the raw
+// HTTP messages, so user-visible strings can be localized and styled.
+//
+//   401 -> token_expired
+//   403 -> { quota_exceeded, collection_disabled, forbidden }
+//   404 -> not_found
+//   412 -> precondition_failed (ETag mismatch)
+//   429 -> rate_limited
+//   5xx -> server_error
+//   network failures -> network
+
+function _classifyExtError(status, body) {
+    const message = (body && (body.message || body.error)) || '';
+    if (status === 0) return { code: 'network', message: 'Network unavailable' };
+    if (status === 401) return { code: 'token_expired', message: 'Session expired. Please sign in again.' };
+    if (status === 403) {
+        const lc = message.toLowerCase();
+        if (lc.includes('quota')) return { code: 'quota_exceeded', message };
+        if (lc.includes('disabled') || lc.includes('collection')) {
+            return { code: 'collection_disabled', message: message || 'Collection disabled' };
+        }
+        return { code: 'forbidden', message: message || 'Forbidden' };
+    }
+    if (status === 404) return { code: 'not_found', message: message || 'Not found' };
+    if (status === 412) return { code: 'precondition_failed', message: message || 'Precondition failed' };
+    if (status === 429) return { code: 'rate_limited', message: message || 'Too many requests' };
+    if (status >= 500) return { code: 'server_error', message: message || `Server error (${status})` };
+    return { code: 'http_error', message: message || `HTTP ${status}` };
+}
+
+/**
+ * Fetch JSON with normalized error mapping. Throws an `Error` whose
+ * `.code` carries one of the codes from `_classifyExtError`.
+ */
+async function extFetchJson(url, options = {}) {
+    const { expectNoBody = false, ...fetchOptions } = options;
+    let response;
+    try {
+        response = await fetch(url, fetchOptions);
+    } catch (e) {
+        const err = new Error('Network unavailable');
+        err.code = 'network';
+        err.cause = e;
+        throw err;
+    }
+    if (!response.ok) {
+        let body = null;
+        try { body = await response.json(); } catch (_) { /* non-JSON */ }
+        const info = _classifyExtError(response.status, body);
+        const err = new Error(info.message);
+        err.code = info.code;
+        err.status = response.status;
+        throw err;
+    }
+    if (expectNoBody) return null;
+    if (response.status === 204) return null;
+    try {
+        return await response.json();
+    } catch (_) {
+        return null;
+    }
 }
 
 // ─── Alarms ─────────────────────────────────────────────────────────────

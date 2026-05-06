@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' http://localhost:8000 https://sync.astian.org https://accounts.astian.org; object-src 'none'; base-uri 'self'; form-action 'self'">
     <title>Midori Sync — Settings</title>
     <link rel="stylesheet" href="options.css">
 </head>
@@ -189,10 +190,32 @@
                 </div>
             </div>
 
+            <!-- Devices -->
+            <div class="card">
+                <h3>📱 Connected Devices</h3>
+                <p class="card-desc">Devices currently signed in to your account. Revoking a device immediately invalidates its sync session.</p>
+                <div id="devices-list" class="devices-list">
+                    <p class="card-desc" id="devices-empty">Loading…</p>
+                </div>
+                <button id="btn-refresh-devices" class="btn btn-sm btn-secondary" style="margin-top:8px">Refresh</button>
+            </div>
+
+            <!-- Backup / Restore -->
+            <div class="card">
+                <h3>💾 Backup &amp; Restore</h3>
+                <p class="card-desc">Export the local configuration (collections enabled, intervals, server URL) as a JSON file. The seed phrase is <strong>not</strong> exported — back it up via the Encryption section instead.</p>
+                <div class="seed-actions">
+                    <button id="btn-export-config" class="btn btn-sm btn-secondary">Export Configuration</button>
+                    <input type="file" id="input-import-config" accept="application/json,.json" style="display:none">
+                    <button id="btn-import-config" class="btn btn-sm btn-secondary">Import Configuration</button>
+                </div>
+            </div>
+
             <!-- Danger zone -->
             <div class="card card-danger">
                 <h3>Danger Zone</h3>
                 <div class="danger-actions">
+                    <button id="btn-wipe-server" class="btn btn-danger">Delete All Server Data</button>
                     <button id="btn-logout" class="btn btn-danger">Sign Out</button>
                 </div>
             </div>
