@@ -7,21 +7,45 @@
  * All encryption/decryption happens client-side. The server never sees plaintext.
  */
 
+/**
+ * Stable per-collection KDF index. NEVER reorder or repurpose existing
+ * indices: re-using an index would silently re-derive the same sub-key
+ * for a different collection, producing data that decrypts cleanly but
+ * carries the wrong type. New collections MUST claim a fresh index.
+ *
+ * Canonical name -> index. Legacy aliases (e.g. `open-tabs`) map to the
+ * same index as their canonical counterpart and exist only for backward
+ * compatibility with installs predating the alias.
+ */
 const COLLECTION_INDEX = {
     'bookmarks': 1,
     'history': 2,
-    'open-tabs': 3,
+    'tabs': 3,             // canonical name for currently-open tabs
+    'open-tabs': 3,        // legacy alias of `tabs` — same sub-key
     'browser-settings': 4,
     'midori-tab': 5,
     'midori-privacy': 6,
     'devices': 7,
+    'passwords': 8,        // encrypted password vault (KDF index reserved)
 };
 
 const KDF_CONTEXT = 'MSPv1key'; // 8 bytes max for libsodium KDF context
 
 class MidoriSyncCrypto {
-    constructor() {
+    constructor(options = {}) {
         this._sodium = null;
+        // Path to the Argon2id worker, resolved relative to the
+        // extension root. Pass `null` to force the synchronous fallback
+        // (useful in tests, Node, or environments without Worker).
+        this._workerUrl = options.workerUrl !== undefined
+            ? options.workerUrl
+            : (typeof browser !== 'undefined' && browser.runtime && browser.runtime.getURL
+                ? browser.runtime.getURL('lib/argon2-worker.js')
+                : null);
+        this._worker = null;
+        this._workerSeq = 0;
+        this._workerPending = new Map();
+        this._workerBroken = false;
     }
 
     async init() {
@@ -40,6 +64,54 @@ class MidoriSyncCrypto {
     }
 
     /**
+     * Decide whether Argon2id should run in a Web Worker. We require:
+     *   - Worker constructor available
+     *   - a worker URL configured (extensions / browser context)
+     *   - the worker has not previously errored out
+     */
+    _canUseWorker() {
+        return !this._workerBroken
+            && typeof Worker !== 'undefined'
+            && typeof this._workerUrl === 'string'
+            && this._workerUrl.length > 0;
+    }
+
+    _ensureWorker() {
+        if (this._worker) return this._worker;
+        const worker = new Worker(this._workerUrl);
+        worker.addEventListener('message', (event) => {
+            const { id, ok, key, error } = event.data || {};
+            const pending = this._workerPending.get(id);
+            if (!pending) return;
+            this._workerPending.delete(id);
+            if (ok) pending.resolve(key);
+            else pending.reject(new Error(error || 'argon2 worker failed'));
+        });
+        worker.addEventListener('error', (event) => {
+            // Mark the worker as broken so subsequent calls fall back.
+            // Reject any in-flight requests so callers don't hang.
+            this._workerBroken = true;
+            for (const { reject } of this._workerPending.values()) {
+                reject(new Error(`argon2 worker error: ${event.message || 'unknown'}`));
+            }
+            this._workerPending.clear();
+            try { worker.terminate(); } catch (_) { /* ignore */ }
+            this._worker = null;
+        });
+        this._worker = worker;
+        return worker;
+    }
+
+    _argon2InWorker(passphrase, salt, opslimit, memlimit) {
+        return new Promise((resolve, reject) => {
+            const worker = this._ensureWorker();
+            const id = ++this._workerSeq;
+            this._workerPending.set(id, { resolve, reject });
+            worker.postMessage({ id, op: 'derive', passphrase, salt, opslimit, memlimit });
+        });
+    }
+
+    /**
      * Generate a random 16-byte salt
      */
     generateSalt() {
@@ -47,19 +119,38 @@ class MidoriSyncCrypto {
     }
 
     /**
-     * Derive a master key from a passphrase using Argon2id
-     * @param {string} passphrase - User's passphrase
+     * Derive a master key from a passphrase using Argon2id.
+     *
+     * Runs inside a dedicated Web Worker when available (extension
+     * runtime) so the main thread is not blocked by the 64 MB / ops=3
+     * memory-hard derivation. Falls back to synchronous in-thread
+     * derivation in environments without Worker support (Node tests,
+     * sandboxes), or if the worker fails to start.
+     *
+     * @param {string|Uint8Array} passphrase - User's passphrase
      * @param {Uint8Array} salt - 16-byte salt
-     * @returns {Uint8Array} 32-byte master key
+     * @returns {Promise<Uint8Array>} 32-byte master key
      */
     async deriveKeys(passphrase, salt) {
         const s = this.sodium;
+        const ops = 3;
+        const mem = 67108864; // 64 MB
+        if (this._canUseWorker()) {
+            try {
+                return await this._argon2InWorker(passphrase, salt, ops, mem);
+            } catch (err) {
+                // One-shot fallback: degrade to in-thread derivation
+                // rather than break login because the worker died.
+                this._workerBroken = true;
+                console.warn('[MidoriSyncCrypto] Argon2id worker failed, falling back to main thread:', err);
+            }
+        }
         return s.crypto_pwhash(
-            32, // key length
+            32,
             passphrase,
             salt,
-            3, // ops limit (MODERATE)
-            67108864, // mem limit: 64 MB
+            ops,
+            mem,
             s.crypto_pwhash_ALG_ARGON2ID13
         );
     }

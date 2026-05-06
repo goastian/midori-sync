@@ -155,6 +155,256 @@ async function setupEncryptionFromMnemonic(mnemonic) {
     console.log('[Midori Sync] Encryption key derived from seed phrase.');
 }
 
+// ─── Inactivity Lock & Optional Local Passphrase ────────────────────────
+// By default the seed phrase + derived encryption key are stored in
+// `browser.storage.local`. Two opt-in protections live on top of that:
+//
+//   1. Local passphrase: the user supplies a passphrase that wraps the
+//      seed phrase + encryption key with XChaCha20-Poly1305. Plaintext
+//      is removed from `browser.storage.local`; only the encrypted
+//      bundle remains at rest. Unlocking requires the passphrase.
+//
+//   2. Inactivity lock: when a passphrase is set, the in-memory
+//      `encryptionKey` is wiped after `LOCK_TIMEOUT_MIN` minutes
+//      without a user action. The next user action must unlock first.
+//
+// Without a passphrase, neither protection is active — the existing
+// behavior of "stored plaintext, never locks" is preserved verbatim so
+// upgrades do not surprise current users.
+
+const LOCK_STORAGE_KEY = 'localLockBundle';
+const LOCK_ALARM_NAME = 'midori-sync-lock';
+const DEFAULT_LOCK_TIMEOUT_MIN = 15;
+
+let lockState = {
+    hasPassphrase: false,    // is a local passphrase configured?
+    locked: false,           // is the encryption key currently absent in memory because of a lock?
+    timeoutMinutes: DEFAULT_LOCK_TIMEOUT_MIN,
+};
+
+// Plaintext seed phrase kept only in memory while the vault is unlocked
+// AND a local passphrase is active. Never persisted to storage in that
+// mode, so the user must re-unlock to view the seed again after a lock.
+let seedPhraseInMemory = null;
+
+function _lockKdfContext() {
+    // 8-byte libsodium KDF context; distinct from MSPv1key so a wrapping
+    // key derived for the local lock cannot collide with collection sub-keys.
+    return 'MSPv1lck';
+}
+
+async function _deriveLockKey(passphrase, salt) {
+    // Reuse the worker-aware derivation in MidoriSyncCrypto so the UI is
+    // not blocked while Argon2id stretches the local passphrase.
+    await crypto_.init();
+    return crypto_.deriveKeys(passphrase, salt);
+}
+
+async function _readLockBundle() {
+    const stored = await browser.storage.local.get(LOCK_STORAGE_KEY);
+    return stored[LOCK_STORAGE_KEY] || null;
+}
+
+async function _writeLockBundle(bundle) {
+    await browser.storage.local.set({ [LOCK_STORAGE_KEY]: bundle });
+}
+
+async function _clearLockBundle() {
+    await browser.storage.local.remove(LOCK_STORAGE_KEY);
+}
+
+/**
+ * Compute and persist the encrypted local bundle from the current
+ * plaintext seed phrase + encryption key, wrapped under a key derived
+ * from `passphrase`.
+ */
+async function _writeLockedSnapshot(passphrase) {
+    await crypto_.init();
+    const stored = await browser.storage.local.get(['seedPhrase', 'encryptionKey']);
+    if (!stored.seedPhrase || !stored.encryptionKey) {
+        throw new Error('Cannot enable lock: seed phrase is not set up');
+    }
+    const salt = crypto_.generateSalt();
+    const wrapKey = await _deriveLockKey(passphrase, salt);
+    const payload = JSON.stringify({
+        seedPhrase: stored.seedPhrase,
+        encryptionKey: stored.encryptionKey,
+    });
+    const bundle = crypto_.encrypt(payload, wrapKey);
+    await _writeLockBundle({
+        v: 1,
+        salt: crypto_.sodium.to_base64(salt, crypto_.sodium.base64_variants.ORIGINAL),
+        bundle,
+        timeoutMinutes: lockState.timeoutMinutes,
+    });
+}
+
+/**
+ * Decrypt the stored bundle and return { seedPhrase, encryptionKey }.
+ * Throws on bad passphrase.
+ */
+async function _readLockedSnapshot(passphrase) {
+    await crypto_.init();
+    const data = await _readLockBundle();
+    if (!data) throw new Error('No local lock bundle stored');
+    if (data.v !== 1) throw new Error(`Unsupported lock bundle version: ${data.v}`);
+    const salt = crypto_.sodium.from_base64(data.salt, crypto_.sodium.base64_variants.ORIGINAL);
+    const wrapKey = await _deriveLockKey(passphrase, salt);
+    let plaintext;
+    try {
+        plaintext = crypto_.decrypt(data.bundle, wrapKey);
+    } catch (e) {
+        throw new Error('Invalid passphrase');
+    }
+    const parsed = JSON.parse(plaintext);
+    return parsed;
+}
+
+async function _scheduleLockAlarm() {
+    if (!lockState.hasPassphrase || lockState.locked) return;
+    const minutes = Math.max(1, lockState.timeoutMinutes || DEFAULT_LOCK_TIMEOUT_MIN);
+    try {
+        await browser.alarms.clear(LOCK_ALARM_NAME);
+        await browser.alarms.create(LOCK_ALARM_NAME, { delayInMinutes: minutes });
+    } catch (e) {
+        console.warn('[Midori Sync] Failed to schedule lock alarm:', e);
+    }
+}
+
+async function _cancelLockAlarm() {
+    try { await browser.alarms.clear(LOCK_ALARM_NAME); } catch (_) { /* ignore */ }
+}
+
+/**
+ * Reset the inactivity timer because the user did something.
+ * Cheap to call from every message handler.
+ */
+function noteUserActivity() {
+    if (lockState.hasPassphrase && !lockState.locked) {
+        _scheduleLockAlarm();
+    }
+}
+
+async function _refreshLockStateFromStorage() {
+    const bundle = await _readLockBundle();
+    lockState.hasPassphrase = !!bundle;
+    if (bundle && typeof bundle.timeoutMinutes === 'number') {
+        lockState.timeoutMinutes = bundle.timeoutMinutes;
+    }
+    // If a bundle exists and the in-memory key is missing, we are locked.
+    lockState.locked = !!bundle && !encryptionKey;
+}
+
+/**
+ * Wipe the in-memory encryption key (and seed cache, if any).
+ * Plaintext on disk is already absent when a passphrase is configured.
+ */
+async function lockEncryption() {
+    if (!lockState.hasPassphrase) {
+        return { success: false, reason: 'no-passphrase' };
+    }
+    encryptionKey = null;
+    seedPhraseInMemory = null;
+    lockState.locked = true;
+    await _cancelLockAlarm();
+    return { success: true };
+}
+
+/**
+ * Unlock by re-deriving and rehydrating the in-memory encryption key
+ * from the encrypted bundle on disk.
+ */
+async function unlockEncryption(passphrase) {
+    await crypto_.init();
+    const snapshot = await _readLockedSnapshot(passphrase);
+    encryptionKey = crypto_.sodium.from_base64(snapshot.encryptionKey, crypto_.sodium.base64_variants.ORIGINAL);
+    seedPhraseInMemory = snapshot.seedPhrase || null;
+    lockState.locked = false;
+    await _scheduleLockAlarm();
+    return { success: true };
+}
+
+/**
+ * Configure (or change) the local passphrase. After a successful call
+ * the seed phrase + encryption key are no longer stored in plaintext.
+ *
+ * @param {{ passphrase: string, currentPassphrase?: string, timeoutMinutes?: number }} data
+ */
+async function enableLocalPassphrase(data) {
+    const { passphrase, currentPassphrase, timeoutMinutes } = data || {};
+    if (!passphrase || passphrase.length < 8) {
+        throw new Error('Passphrase must be at least 8 characters');
+    }
+
+    // If a passphrase is already set, require the current one to rotate.
+    const existing = await _readLockBundle();
+    if (existing && !lockState.locked) {
+        // Already unlocked — fine, we have the plaintext we need.
+    } else if (existing && lockState.locked) {
+        if (!currentPassphrase) throw new Error('Current passphrase required to change');
+        const snap = await _readLockedSnapshot(currentPassphrase);
+        // Rehydrate plaintext briefly so we can re-wrap it under the new passphrase.
+        await browser.storage.local.set({
+            seedPhrase: snap.seedPhrase,
+            encryptionKey: snap.encryptionKey,
+        });
+        encryptionKey = crypto_.sodium.from_base64(snap.encryptionKey, crypto_.sodium.base64_variants.ORIGINAL);
+        lockState.locked = false;
+    }
+
+    if (typeof timeoutMinutes === 'number' && timeoutMinutes >= 1) {
+        lockState.timeoutMinutes = Math.floor(timeoutMinutes);
+    }
+
+    await _writeLockedSnapshot(passphrase);
+    // Remove plaintext copies once the encrypted bundle is durable.
+    await browser.storage.local.remove(['seedPhrase', 'encryptionKey']);
+    lockState.hasPassphrase = true;
+    lockState.locked = false;
+    await _scheduleLockAlarm();
+    return { success: true };
+}
+
+/**
+ * Remove the local passphrase, restoring plaintext seed-phrase storage.
+ * The current passphrase is required.
+ */
+async function disableLocalPassphrase(data) {
+    const { passphrase } = data || {};
+    if (!lockState.hasPassphrase) return { success: true, alreadyDisabled: true };
+    if (!passphrase) throw new Error('Passphrase required to disable lock');
+    const snap = await _readLockedSnapshot(passphrase);
+    await browser.storage.local.set({
+        seedPhrase: snap.seedPhrase,
+        encryptionKey: snap.encryptionKey,
+    });
+    encryptionKey = crypto_.sodium.from_base64(snap.encryptionKey, crypto_.sodium.base64_variants.ORIGINAL);
+    await _clearLockBundle();
+    lockState.hasPassphrase = false;
+    lockState.locked = false;
+    await _cancelLockAlarm();
+    return { success: true };
+}
+
+async function getLockStatus() {
+    return {
+        hasPassphrase: lockState.hasPassphrase,
+        locked: lockState.locked,
+        timeoutMinutes: lockState.timeoutMinutes,
+    };
+}
+
+// Listen for the lock alarm and any other alarm wired elsewhere.
+if (typeof browser !== 'undefined' && browser.alarms && browser.alarms.onAlarm) {
+    browser.alarms.onAlarm.addListener((alarm) => {
+        if (alarm && alarm.name === LOCK_ALARM_NAME) {
+            lockEncryption().catch(e =>
+                console.warn('[Midori Sync] Auto-lock failed:', e)
+            );
+        }
+    });
+}
+
 // ─── Crypto Helpers ─────────────────────────────────────────────────────
 
 function exportKeyBase64(key) {
@@ -223,6 +473,7 @@ async function initializeState() {
     }
 
     await initEncryptionKey();
+    await _refreshLockStateFromStorage();
 
     if (authState.token) {
         setupSyncAlarms(stored.syncSettings || {});
@@ -262,10 +513,19 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         savePassword: handleSavePassword,
         deletePassword: handleDeletePassword,
         updateServerUrl: handleUpdateServerUrl,
+        getLockStatus: getLockStatus,
+        enableLocalPassphrase: enableLocalPassphrase,
+        disableLocalPassphrase: disableLocalPassphrase,
+        unlockEncryption: (data) => unlockEncryption(data && data.passphrase),
+        lockEncryption: () => lockEncryption(),
     };
 
     const handler = handlers[msg.type];
     if (handler) {
+        // Reset the inactivity timer on every user-driven message.
+        // Lock-related messages are intentionally allowed to extend the
+        // session because they represent active interaction with the UI.
+        try { noteUserActivity(); } catch (_) { /* best effort */ }
         handler(msg.data).then(sendResponse).catch(err => {
             sendResponse({ error: err.message });
         });
@@ -457,11 +717,20 @@ async function handleRecoverWithSeedPhrase(data) {
 
 /**
  * Return the stored seed phrase so the user can view it in settings.
+ *
+ * When a local passphrase is active and the vault is locked, the seed
+ * phrase is not in plaintext on disk and we refuse to surface it. The
+ * caller must unlock first via `unlockEncryption`.
  */
 async function handleGetSeedPhrase() {
     const stored = await browser.storage.local.get('seedPhrase');
-    if (!stored.seedPhrase) throw new Error('No seed phrase stored');
-    return { mnemonic: stored.seedPhrase };
+    if (stored.seedPhrase) return { mnemonic: stored.seedPhrase };
+    if (lockState.hasPassphrase) {
+        if (lockState.locked) throw new Error('Vault is locked');
+        if (seedPhraseInMemory) return { mnemonic: seedPhraseInMemory };
+        throw new Error('Seed phrase not in memory; unlock the vault again');
+    }
+    throw new Error('No seed phrase stored');
 }
 
 async function restoreFromServer() {

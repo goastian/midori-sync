@@ -24,7 +24,7 @@
             "lib/midori-sync-crypto.js",
             "background/collection-adapters/bookmarks.js",
             "background/collection-adapters/history.js",
-            "background/collection-adapters/open-tabs.js",
+            "background/collection-adapters/tabs.js",
             "background/collection-adapters/browser-settings.js",
             "background/collection-adapters/midori-tab.js",
             "background/collection-adapters/midori-privacy.js",
