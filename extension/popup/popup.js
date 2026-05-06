@@ -42,6 +42,7 @@ const views = {
     login: document.getElementById('view-login'),
     pair: document.getElementById('view-pair'),
     main: document.getElementById('view-main'),
+    locked: document.getElementById('view-locked'),
 };
 
 // ─── Initialization ─────────────────────────────────────────────────────
@@ -49,7 +50,14 @@ const views = {
 document.addEventListener('DOMContentLoaded', async () => {
     const state = await sendMessage('getState');
     if (state.isLoggedIn) {
-        showMainView(state);
+        // Check lock state before showing main view; if locked, prompt unlock.
+        const lock = await safeLockStatus();
+        if (lock?.hasPassphrase && lock.locked) {
+            showLockedView();
+        } else {
+            showMainView(state);
+            updateLockBadge(lock);
+        }
     } else {
         showView('login');
     }
@@ -312,6 +320,75 @@ function setupEventListeners() {
         showToast('✓ Logged out', 1500, 'info');
         showView('login');
     });
+
+    // Lock badge — click to lock immediately.
+    const lockBadge = document.getElementById('lock-badge');
+    lockBadge?.addEventListener('click', async () => {
+        const lock = await safeLockStatus();
+        if (!lock?.hasPassphrase) return;
+        if (lock.locked) {
+            showLockedView();
+        } else {
+            await sendMessage('lockEncryption');
+            showToast('🔒 Vault locked', 1500, 'info');
+            showLockedView();
+        }
+    });
+
+    // Unlock form
+    const unlockForm = document.getElementById('unlock-form');
+    unlockForm?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const errEl = document.getElementById('unlock-error');
+        errEl.classList.add('hidden');
+        const pw = document.getElementById('unlock-passphrase').value;
+        if (!pw) return;
+        try {
+            const result = await sendMessage('unlockEncryption', { passphrase: pw });
+            if (result?.error) throw new Error(result.error);
+            document.getElementById('unlock-passphrase').value = '';
+            showToast('🔓 Vault unlocked', 1500, 'success');
+            const state = await sendMessage('getState');
+            const lock = await safeLockStatus();
+            showMainView(state);
+            updateLockBadge(lock);
+        } catch (err) {
+            errEl.textContent = err.message || 'Unlock failed';
+            errEl.classList.remove('hidden');
+        }
+    });
+
+    // Open settings from locked view
+    document.getElementById('locked-open-settings')?.addEventListener('click', () => {
+        browser.tabs.create({ url: browser.runtime.getURL('options/options.html') });
+        window.close();
+    });
+}
+
+// ─── Lock Helpers ───────────────────────────────────────────────────────
+
+async function safeLockStatus() {
+    try {
+        return await sendMessage('getLockStatus');
+    } catch (_) {
+        return null;
+    }
+}
+
+function showLockedView() {
+    showView('locked');
+}
+
+function updateLockBadge(lock) {
+    const el = document.getElementById('lock-badge');
+    if (!el) return;
+    if (!lock?.hasPassphrase) {
+        el.classList.add('hidden');
+        return;
+    }
+    el.classList.remove('hidden');
+    el.textContent = lock.locked ? '🔒' : '🔓';
+    el.title = lock.locked ? 'Vault locked — click to unlock' : 'Vault unlocked — click to lock';
 }
 
 // ─── Utilities ──────────────────────────────────────────────────────────

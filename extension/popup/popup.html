@@ -76,6 +76,7 @@
                     <div class="user-name" id="user-name">User</div>
                     <div class="user-email" id="user-email">user@email.com</div>
                 </div>
+                <div id="lock-badge" class="lock-badge hidden" title="Vault status">🔓</div>
             </div>
         </div>
 
@@ -117,6 +118,25 @@
                 Settings
             </button>
             <button id="logout-btn" class="btn btn-danger btn-block">Sign Out</button>
+        </div>
+    </div>
+
+    <!-- Locked View -->
+    <div id="view-locked" class="view hidden">
+        <div class="header compact">
+            <h2>🔒 Vault Locked</h2>
+            <p class="subtitle">Enter your local passphrase to resume sync.</p>
+        </div>
+        <form id="unlock-form" class="form">
+            <div class="field">
+                <label for="unlock-passphrase">Passphrase</label>
+                <input type="password" id="unlock-passphrase" autocomplete="current-password" required>
+            </div>
+            <div id="unlock-error" class="error hidden"></div>
+            <button type="submit" class="btn btn-primary">Unlock</button>
+        </form>
+        <div class="footer-link">
+            <button id="locked-open-settings" class="link-btn">Open Settings</button>
         </div>
     </div>
 

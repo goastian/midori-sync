@@ -727,3 +727,17 @@ h3 {
     color: #0284c7;
     border: 1px solid #bae6fd;
 }
+
+/* Lock badge in popup header */
+.lock-badge {
+    margin-left: auto;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    user-select: none;
+    transition: background 0.15s ease;
+}
+.lock-badge:hover {
+    background: var(--color-surface);
+}

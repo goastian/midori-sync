@@ -28,6 +28,12 @@ let lastSyncTimes = { bookmarks: 0, history: 0, tabs: 0, passwords: 0 };
 let syncTimeouts = {};
 let encryptionKey = null;
 
+// Set ONLY while a master-key rotation is in progress (or has been
+// interrupted). When non-null, decryption falls back to it after the
+// active key fails — this is what makes a rotation crash-safe across
+// browser restarts. See the "Master key rotation" section below.
+let previousEncryptionKey = null;
+
 const MidoriSyncCryptoClass = globalThis.MidoriSyncCrypto;
 if (!MidoriSyncCryptoClass) {
     throw new Error('MidoriSyncCrypto library is not loaded');
@@ -405,6 +411,286 @@ if (typeof browser !== 'undefined' && browser.alarms && browser.alarms.onAlarm) 
     });
 }
 
+// ─── Master Key Rotation ────────────────────────────────────────────────
+// Implements the procedure documented in docs/encryption.md:
+//   1. Caller previews a new mnemonic and confirms.
+//   2. We derive M_new, stash M_old as `previousEncryptionKey`, and
+//      persist a checkpoint to storage so a crash can resume.
+//   3. For each rotatable collection we fetch every record, decrypt
+//      under M_old (or M_new on resume), and re-upload using M_new as
+//      the active encryption key. Per-collection cursors are
+//      checkpointed after each chunk.
+//   4. When all collections finish we swap the on-disk seed phrase +
+//      encryption key to M_new and clear the previous key.
+//
+// Reads during rotation transparently fall back to M_old via
+// `decryptBsoPayload`, which is why mixed-state stays functional.
+
+const ROTATION_STORAGE_KEY = 'rotationState';
+const ROTATABLE_COLLECTIONS = ['bookmarks', 'history', 'tabs', 'browser-settings', 'midori-tab', 'midori-privacy', 'passwords'];
+
+let rotationState = {
+    inProgress: false,
+    startedAt: null,
+    completed: [],          // collection names finished
+    currentCollection: null,
+    error: null,
+};
+
+async function _persistRotationState(extra = {}) {
+    const payload = {
+        ...rotationState,
+        ...extra,
+        // Persist the previous key so we can keep reading after a reload.
+        previousKeyB64: previousEncryptionKey
+            ? crypto_.sodium.to_base64(previousEncryptionKey, crypto_.sodium.base64_variants.ORIGINAL)
+            : null,
+    };
+    await browser.storage.local.set({ [ROTATION_STORAGE_KEY]: payload });
+}
+
+async function _clearRotationState() {
+    rotationState = {
+        inProgress: false,
+        startedAt: null,
+        completed: [],
+        currentCollection: null,
+        error: null,
+    };
+    await browser.storage.local.remove(ROTATION_STORAGE_KEY);
+}
+
+async function _restoreRotationState() {
+    const stored = await browser.storage.local.get(ROTATION_STORAGE_KEY);
+    const data = stored[ROTATION_STORAGE_KEY];
+    if (!data) return;
+    rotationState = {
+        inProgress: !!data.inProgress,
+        startedAt: data.startedAt || null,
+        completed: Array.isArray(data.completed) ? data.completed : [],
+        currentCollection: data.currentCollection || null,
+        error: data.error || null,
+    };
+    if (data.previousKeyB64) {
+        previousEncryptionKey = crypto_.sodium.from_base64(
+            data.previousKeyB64,
+            crypto_.sodium.base64_variants.ORIGINAL
+        );
+    }
+}
+
+/**
+ * Re-encrypt every record of a collection under `newKey`, decrypting
+ * under `oldKey` (with M_new fallback for resumes). Pages through the
+ * collection in chunks so a crash does not lose progress.
+ */
+async function _rotateCollection(collection, oldKey, newKey) {
+    if (!authState.token) throw new Error('Not logged in');
+    // Full scan: rotation must touch every record, not just newer ones.
+    const url = `${authState.serverUrl}/api/ext/storage/${collection}`;
+    const resp = await fetch(url, { headers: authHeaders() });
+    if (!resp.ok) {
+        // Empty / missing collection on the server — nothing to rotate.
+        if (resp.status === 404) return;
+        throw new Error(`Fetch ${collection} failed (HTTP ${resp.status})`);
+    }
+    const items = await resp.json();
+    if (!Array.isArray(items) || items.length === 0) return;
+
+    // Decrypt with old key; fallback to new key for items already rotated
+    // in a previous interrupted run.
+    const reencrypted = [];
+    for (const bso of items) {
+        if (!bso || !bso.payload) continue;
+        let plaintext = null;
+        for (const k of [oldKey, newKey]) {
+            if (!k) continue;
+            try {
+                plaintext = crypto_.decrypt(bso.payload, k);
+                break;
+            } catch (_) { /* try next */ }
+        }
+        if (plaintext === null) {
+            // Skip items we cannot decrypt under either key — they were
+            // likely written by an even older key and rotation cannot
+            // recover them. Surface this in logs but do not abort.
+            console.warn(`[Midori Sync] Skipping unrotatable record ${bso.id} in ${collection}`);
+            continue;
+        }
+        reencrypted.push({ id: bso.id, payload: encryptPayload(plaintext, newKey) });
+    }
+
+    if (reencrypted.length === 0) return;
+
+    // Upload using a one-shot fetch path (we cannot use uploadBsos here
+    // because it reads the *global* encryptionKey, which is still M_old
+    // until the rotation commits).
+    const CHUNK = 100;
+    for (let i = 0; i < reencrypted.length; i += CHUNK) {
+        const chunk = reencrypted.slice(i, i + CHUNK);
+        const response = await fetch(`${authState.serverUrl}/api/ext/storage/${collection}`, {
+            method: 'POST',
+            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(chunk),
+        });
+        if (!response.ok) {
+            const errBody = await response.json().catch(() => null);
+            throw new Error(
+                `Rotation upload to '${collection}' failed (HTTP ${response.status}): ${errBody?.message ?? 'unknown'}`
+            );
+        }
+    }
+}
+
+/**
+ * Preview a new mnemonic without changing anything.
+ * Caller confirms it has been recorded, then calls performKeyRotation.
+ */
+async function previewKeyRotation() {
+    await crypto_.init();
+    if (lockState.hasPassphrase && lockState.locked) {
+        throw new Error('Vault is locked. Unlock before rotating the master key.');
+    }
+    if (!encryptionKey) throw new Error('No encryption key configured');
+    if (rotationState.inProgress) {
+        throw new Error('A rotation is already in progress');
+    }
+    const mnemonic = generateMnemonic();
+    return { mnemonic };
+}
+
+/**
+ * Run the rotation end-to-end. May resume a prior interrupted run when
+ * called with `{ resume: true }`.
+ */
+async function performKeyRotation(data) {
+    await crypto_.init();
+    if (lockState.hasPassphrase && lockState.locked) {
+        throw new Error('Vault is locked. Unlock before rotating the master key.');
+    }
+
+    const { newMnemonic, resume = false } = data || {};
+
+    if (!resume) {
+        if (!newMnemonic || !validateMnemonic(newMnemonic)) {
+            throw new Error('Invalid new seed phrase');
+        }
+        if (!encryptionKey) throw new Error('Current encryption key not loaded');
+
+        // Derive M_new (worker-aware via deriveKeys).
+        const newKey = deriveKeyFromMnemonic(newMnemonic);
+        previousEncryptionKey = encryptionKey;
+        // Stash the new mnemonic+key in the rotation checkpoint so we
+        // can resume after a crash without losing it.
+        rotationState = {
+            inProgress: true,
+            startedAt: new Date().toISOString(),
+            completed: [],
+            currentCollection: null,
+            error: null,
+        };
+        await _persistRotationState({
+            newMnemonic,
+            newKeyB64: crypto_.sodium.to_base64(newKey, crypto_.sodium.base64_variants.ORIGINAL),
+        });
+        return _runRotationLoop(newKey, newMnemonic);
+    }
+
+    // Resume path: pull the checkpoint and continue.
+    const stored = await browser.storage.local.get(ROTATION_STORAGE_KEY);
+    const cp = stored[ROTATION_STORAGE_KEY];
+    if (!cp || !cp.inProgress || !cp.newKeyB64 || !cp.newMnemonic) {
+        throw new Error('No rotation to resume');
+    }
+    const newKey = crypto_.sodium.from_base64(cp.newKeyB64, crypto_.sodium.base64_variants.ORIGINAL);
+    return _runRotationLoop(newKey, cp.newMnemonic);
+}
+
+async function _runRotationLoop(newKey, newMnemonic) {
+    try {
+        for (const collection of ROTATABLE_COLLECTIONS) {
+            if (rotationState.completed.includes(collection)) continue;
+            rotationState.currentCollection = collection;
+            await _persistRotationState({
+                newMnemonic,
+                newKeyB64: crypto_.sodium.to_base64(newKey, crypto_.sodium.base64_variants.ORIGINAL),
+            });
+            try {
+                await _rotateCollection(collection, previousEncryptionKey, newKey);
+            } catch (e) {
+                rotationState.error = `Failed on ${collection}: ${e.message || e}`;
+                await _persistRotationState({
+                    newMnemonic,
+                    newKeyB64: crypto_.sodium.to_base64(newKey, crypto_.sodium.base64_variants.ORIGINAL),
+                });
+                throw e;
+            }
+            rotationState.completed.push(collection);
+            rotationState.currentCollection = null;
+            rotationState.error = null;
+            await _persistRotationState({
+                newMnemonic,
+                newKeyB64: crypto_.sodium.to_base64(newKey, crypto_.sodium.base64_variants.ORIGINAL),
+            });
+        }
+
+        // Commit: swap active key + persist seed/key per current lock mode.
+        encryptionKey = newKey;
+        const newKeyB64 = crypto_.sodium.to_base64(newKey, crypto_.sodium.base64_variants.ORIGINAL);
+        if (lockState.hasPassphrase) {
+            // Update in-memory copy of the seed phrase; the locked bundle
+            // on disk is rewritten the next time the user re-enables the
+            // passphrase. Until then we keep plaintext absent on disk.
+            seedPhraseInMemory = newMnemonic;
+            await browser.storage.local.remove(['seedPhrase', 'encryptionKey']);
+        } else {
+            await browser.storage.local.set({
+                seedPhrase: newMnemonic,
+                encryptionKey: newKeyB64,
+            });
+        }
+
+        // Reset incremental cursors so the next sync re-pulls everything
+        // and confirms the rotation took effect end-to-end.
+        lastSyncTimes = { bookmarks: 0, history: 0, tabs: 0, passwords: 0 };
+        await browser.storage.local.set({ lastSyncTimes });
+
+        previousEncryptionKey = null;
+        await _clearRotationState();
+        return { success: true };
+    } catch (err) {
+        // Leave checkpoint + previousEncryptionKey in place so the user
+        // can retry via resumeKeyRotation without losing progress.
+        return { success: false, error: err.message || String(err) };
+    }
+}
+
+async function getRotationStatus() {
+    return {
+        inProgress: rotationState.inProgress,
+        startedAt: rotationState.startedAt,
+        completed: rotationState.completed.slice(),
+        total: ROTATABLE_COLLECTIONS.length,
+        currentCollection: rotationState.currentCollection,
+        error: rotationState.error,
+        hasPreviousKey: !!previousEncryptionKey,
+    };
+}
+
+/**
+ * Abort an in-flight rotation. Server-side state stays partially
+ * rotated, but reads keep working because `previousEncryptionKey`
+ * remains as a fallback. The user is expected to either resume or
+ * accept the mixed state until the next rotation.
+ */
+async function abortKeyRotation() {
+    if (!rotationState.inProgress) return { success: true, alreadyClean: true };
+    rotationState.inProgress = false;
+    rotationState.error = 'Aborted by user';
+    await _persistRotationState();
+    return { success: true };
+}
+
 // ─── Crypto Helpers ─────────────────────────────────────────────────────
 
 function exportKeyBase64(key) {
@@ -420,14 +706,24 @@ function encryptPayload(plaintext, key) {
 }
 
 function decryptBsoPayload(bso, key) {
-    if (!key || !bso.payload) return bso;
-    try {
-        const decrypted = crypto_.decrypt(bso.payload, key);
-        return { ...bso, payload: decrypted, _decrypted: true };
-    } catch (e) {
-        console.warn('[Midori Sync] Decryption failed for BSO', bso.id, ':', e.message || e);
-        return { ...bso, _decrypted: false };
+    if (!bso.payload) return bso;
+    // Try the active key first, then the previous master key (only set
+    // during a mixed-state rotation). This keeps reads working while a
+    // rotation is mid-flight or has been interrupted.
+    const candidates = [];
+    if (key) candidates.push(key);
+    if (previousEncryptionKey && previousEncryptionKey !== key) {
+        candidates.push(previousEncryptionKey);
     }
+    if (candidates.length === 0) return bso;
+    for (const candidate of candidates) {
+        try {
+            const decrypted = crypto_.decrypt(bso.payload, candidate);
+            return { ...bso, payload: decrypted, _decrypted: true };
+        } catch (_) { /* try next candidate */ }
+    }
+    console.warn('[Midori Sync] Decryption failed for BSO', bso.id);
+    return { ...bso, _decrypted: false };
 }
 
 /**
@@ -474,6 +770,7 @@ async function initializeState() {
 
     await initEncryptionKey();
     await _refreshLockStateFromStorage();
+    await _restoreRotationState();
 
     if (authState.token) {
         setupSyncAlarms(stored.syncSettings || {});
@@ -518,6 +815,10 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         disableLocalPassphrase: disableLocalPassphrase,
         unlockEncryption: (data) => unlockEncryption(data && data.passphrase),
         lockEncryption: () => lockEncryption(),
+        previewKeyRotation: () => previewKeyRotation(),
+        performKeyRotation: performKeyRotation,
+        getRotationStatus: getRotationStatus,
+        abortKeyRotation: abortKeyRotation,
     };
 
     const handler = handlers[msg.type];

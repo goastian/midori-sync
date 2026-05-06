@@ -107,6 +107,88 @@
                 </div>
             </div>
 
+            <!-- Local Lock -->
+            <div class="card">
+                <h3>🔒 Local Lock</h3>
+                <p class="card-desc">Optionally protect this device with a passphrase. The passphrase is required to unlock decryption after a configurable inactivity timeout — it never leaves this device.</p>
+
+                <div class="info-row">
+                    <span class="info-label">Status</span>
+                    <span id="lock-status" class="info-value">Checking…</span>
+                </div>
+
+                <!-- Enable -->
+                <div id="lock-enable-form" class="seed-section hidden" style="margin-top:8px">
+                    <div class="form-group">
+                        <label for="lock-new-passphrase">New passphrase</label>
+                        <input type="password" id="lock-new-passphrase" autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label for="lock-confirm-passphrase">Confirm passphrase</label>
+                        <input type="password" id="lock-confirm-passphrase" autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label for="lock-timeout">Auto-lock after</label>
+                        <select id="lock-timeout">
+                            <option value="5">5 minutes</option>
+                            <option value="15" selected>15 minutes</option>
+                            <option value="30">30 minutes</option>
+                            <option value="60">1 hour</option>
+                        </select>
+                    </div>
+                    <button id="btn-enable-lock" class="btn btn-primary">Enable Local Lock</button>
+                </div>
+
+                <!-- Manage (already enabled) -->
+                <div id="lock-manage-form" class="seed-section hidden" style="margin-top:8px">
+                    <button id="btn-lock-now" class="btn btn-sm btn-secondary">🔒 Lock Now</button>
+                    <details style="margin-top:12px">
+                        <summary class="card-summary">Disable Local Lock</summary>
+                        <div class="form-group" style="margin-top:8px">
+                            <label for="lock-disable-passphrase">Current passphrase</label>
+                            <input type="password" id="lock-disable-passphrase" autocomplete="current-password">
+                        </div>
+                        <button id="btn-disable-lock" class="btn btn-sm btn-danger">Disable</button>
+                    </details>
+                </div>
+            </div>
+
+            <!-- Master Key Rotation -->
+            <div class="card">
+                <h3>🔑 Master Key Rotation</h3>
+                <p class="card-desc">Generate a brand-new seed phrase and re-encrypt every record on the server under the new key. This is safe to interrupt — progress is checkpointed and reads keep working with the previous key until rotation completes.</p>
+
+                <div id="rotation-idle">
+                    <button id="btn-rotation-preview" class="btn btn-secondary">Generate New Seed Phrase</button>
+                </div>
+
+                <div id="rotation-confirm" class="seed-section hidden" style="margin-top:12px">
+                    <p class="card-desc"><strong>Write down this new seed phrase before continuing.</strong> You will need it to decrypt your data on every device.</p>
+                    <div class="seed-phrase-grid" id="rotation-new-grid"></div>
+                    <div class="seed-actions" style="margin-top:8px">
+                        <button id="btn-rotation-copy" class="btn btn-sm btn-secondary">📋 Copy</button>
+                        <button id="btn-rotation-cancel" class="btn btn-sm btn-secondary">Cancel</button>
+                        <button id="btn-rotation-start" class="btn btn-primary">I've Saved It — Start Rotation</button>
+                    </div>
+                </div>
+
+                <div id="rotation-progress" class="seed-section hidden" style="margin-top:12px">
+                    <div class="info-row">
+                        <span class="info-label">Progress</span>
+                        <span id="rotation-progress-text" class="info-value">—</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Current</span>
+                        <span id="rotation-progress-current" class="info-value">—</span>
+                    </div>
+                    <p id="rotation-progress-error" class="seed-warning hidden"></p>
+                    <div class="seed-actions" style="margin-top:8px">
+                        <button id="btn-rotation-resume" class="btn btn-sm btn-primary hidden">Resume</button>
+                        <button id="btn-rotation-abort" class="btn btn-sm btn-secondary hidden">Abort</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Danger zone -->
             <div class="card card-danger">
                 <h3>Danger Zone</h3>
