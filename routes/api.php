@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\Ext\ExtAuthController;
+use App\Http\Controllers\Api\Ext\ExtDeviceController;
 use App\Http\Controllers\Api\Ext\ExtPairingController;
 use App\Http\Controllers\Api\Ext\ExtStorageController;
 use App\Http\Controllers\Api\V1\AuthTokenController;
@@ -51,6 +52,12 @@ Route::prefix('ext')->middleware(CorsForExtension::class)->group(function () {
 
         // Device pairing (generate token)
         Route::post('/pair', [ExtPairingController::class, 'generate']);
+
+        // Devices (list / rename / revoke) and full wipe
+        Route::get('/devices', [ExtDeviceController::class, 'index']);
+        Route::patch('/devices/{id}', [ExtDeviceController::class, 'rename']);
+        Route::delete('/devices/{id}', [ExtDeviceController::class, 'revoke']);
+        Route::delete('/data', [ExtDeviceController::class, 'wipe']);
 
         // Storage (flat BSO array format)
         Route::middleware(EnforceQuota::class)->group(function () {
