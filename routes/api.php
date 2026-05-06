@@ -19,12 +19,22 @@ use Illuminate\Support\Facades\Route;
 // Dedicated endpoints for the browser extension with simplified data formats.
 Route::prefix('ext')->middleware(CorsForExtension::class)->group(function () {
 
-    // Auth (unauthenticated — extension OAuth flow)
-    Route::get('/auth/start', [ExtAuthController::class, 'start']);
-    Route::get('/auth/poll', [ExtAuthController::class, 'poll']);
+    // Catch-all OPTIONS so preflights hit `CorsForExtension` even when
+    // the path matches no GET/POST/... route. Laravel/Symfony otherwise
+    // auto-respond with 200+Allow and bypass route middleware.
+    Route::options('{any}', fn () => response('', 204))->where('any', '.*');
 
-    // Pairing redeem (unauthenticated — uses pairing token)
-    Route::post('/pair/redeem', [ExtPairingController::class, 'redeem']);
+    // Unauthenticated extension endpoints get their own per-IP bucket
+    // so brute-forcing pairing tokens or sweeping OAuth poll states
+    // cannot exhaust the authenticated read budget of the same client.
+    Route::middleware('throttle:sync-unauth')->group(function () {
+        // Auth (unauthenticated — extension OAuth flow)
+        Route::get('/auth/start', [ExtAuthController::class, 'start']);
+        Route::get('/auth/poll', [ExtAuthController::class, 'poll']);
+
+        // Pairing redeem (unauthenticated — uses pairing token)
+        Route::post('/pair/redeem', [ExtPairingController::class, 'redeem']);
+    });
 
     // Authenticated extension endpoints
     Route::middleware([ValidateSyncToken::class, TrackDevice::class])->group(function () {
@@ -69,6 +79,9 @@ Route::prefix('ext')->middleware(CorsForExtension::class)->group(function () {
 
 // ─── API v1 — Midori Sync Protocol ─────────────────────────────────────
 Route::prefix('v1')->middleware(CorsForExtension::class)->group(function () {
+
+    // Catch-all OPTIONS so preflights hit `CorsForExtension`.
+    Route::options('{any}', fn () => response('', 204))->where('any', '.*');
 
     // Auth: exchange OAuth token for sync session token
     Route::post('/auth/token', [AuthTokenController::class, 'store']);

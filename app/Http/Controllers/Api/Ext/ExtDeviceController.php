@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Device;
 use App\Services\SyncAuthService;
 use App\Services\SyncStorageService;
+use App\Support\SecurityLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -74,18 +75,28 @@ class ExtDeviceController extends Controller
 
         // Revoke all sync sessions tied to this device, then drop the
         // device row. This invalidates any token still in use on it.
-        \App\Models\SyncSession::where('user_id', $user->id)
+        $revoked = \App\Models\SyncSession::where('user_id', $user->id)
             ->where('device_id', $device->id)
             ->delete();
 
         $device->delete();
+
+        SecurityLog::info(SecurityLog::EVENT_DEVICE_REVOKED, [
+            'target_device_id' => $id,
+            'sessions_revoked' => (int) $revoked,
+        ], $request);
 
         return response()->json(null, 204);
     }
 
     public function wipe(Request $request): JsonResponse
     {
-        $this->storage->deleteAllUserData($request->user()->id);
+        $userId = $request->user()->id;
+        $this->storage->deleteAllUserData($userId);
+
+        SecurityLog::warning(SecurityLog::EVENT_DATA_WIPED, [
+            'user_id' => $userId,
+        ], $request);
 
         return response()->json([
             'success' => true,

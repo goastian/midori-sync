@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\ExchangeTokenRequest;
 use App\Services\SyncAuthService;
+use App\Support\SecurityLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -69,6 +70,12 @@ class AuthTokenController extends Controller
             $request->userAgent(),
         );
 
+        SecurityLog::info(SecurityLog::EVENT_TOKEN_ISSUED, [
+            'user_id' => $user->id,
+            'device_pk' => $deviceId,
+            'flow' => 'oauth_exchange',
+        ], $request);
+
         return response()->json([
             'token' => $tokenData['token'],
             'expires_at' => $tokenData['expires_at'],
@@ -90,6 +97,10 @@ class AuthTokenController extends Controller
         }
 
         $this->authService->revokeToken($token);
+
+        SecurityLog::info(SecurityLog::EVENT_TOKEN_REVOKED, [
+            'user_id' => $request->user()?->id,
+        ], $request);
 
         return response()->json(null, 204);
     }

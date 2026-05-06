@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Web;
 
 use App\Http\Controllers\Controller;
 use App\Models\SyncSession;
+use App\Support\SecurityLog;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 
@@ -118,16 +119,28 @@ class AuditController extends Controller
 
     public function revoke(Request $request, string $id)
     {
-        SyncSession::where('user_id', $request->user()->id)
+        $deleted = SyncSession::where('user_id', $request->user()->id)
             ->where('id', $id)
             ->delete();
+
+        if ($deleted) {
+            SecurityLog::info(SecurityLog::EVENT_TOKEN_REVOKED, [
+                'session_id' => $id,
+                'flow' => 'audit_ui',
+            ], $request);
+        }
 
         return redirect()->back();
     }
 
     public function revokeAll(Request $request)
     {
-        SyncSession::where('user_id', $request->user()->id)->delete();
+        $count = SyncSession::where('user_id', $request->user()->id)->delete();
+
+        SecurityLog::warning(SecurityLog::EVENT_TOKEN_REVOKED_BULK, [
+            'count' => (int) $count,
+            'flow' => 'audit_ui',
+        ], $request);
 
         return redirect()->back();
     }

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\Ext\RedeemPairingRequest;
 use App\Models\User;
 use App\Services\SyncAuthService;
+use App\Support\SecurityLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -25,14 +26,19 @@ class ExtPairingController extends Controller
     public function generate(Request $request): JsonResponse
     {
         $pairingToken = Str::random(32);
+        $ttl = (int) config('services.sync.pairing_ttl', 300);
 
         Cache::put("pairing:{$pairingToken}", [
             'user_id' => $request->user()->id,
-        ], now()->addMinutes(5));
+        ], now()->addSeconds($ttl));
+
+        SecurityLog::info(SecurityLog::EVENT_PAIRING_GENERATED, [
+            'user_id' => $request->user()->id,
+        ], $request);
 
         return response()->json([
             'pairing_token' => $pairingToken,
-            'expires_in' => 300,
+            'expires_in' => $ttl,
         ]);
     }
 
@@ -46,6 +52,9 @@ class ExtPairingController extends Controller
         $cached = Cache::pull("pairing:{$request->input('pairing_token')}");
 
         if (!$cached) {
+            SecurityLog::warning(SecurityLog::EVENT_PAIRING_REJECTED, [
+                'reason' => 'invalid_or_expired',
+            ], $request);
             return response()->json(['error' => 'Invalid or expired pairing token'], 404);
         }
 
@@ -66,6 +75,11 @@ class ExtPairingController extends Controller
             $request->ip(),
             $request->userAgent(),
         );
+
+        SecurityLog::info(SecurityLog::EVENT_PAIRING_REDEEMED, [
+            'user_id' => $user->id,
+            'device_id' => $device->device_id,
+        ], $request);
 
         return response()->json([
             'token' => $tokenData['token'],

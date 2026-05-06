@@ -49,8 +49,11 @@ return [
         'rate_limit' => env('SYNC_RATE_LIMIT', 60),
         'rate_limit_read' => env('SYNC_RATE_LIMIT_READ'),
         'rate_limit_write' => env('SYNC_RATE_LIMIT_WRITE'),
+        'unauth_rate_limit' => env('SYNC_UNAUTH_RATE_LIMIT', 30),
         'http_compression' => env('SYNC_HTTP_COMPRESSION', false),
         'http_compression_min_bytes' => env('SYNC_HTTP_COMPRESSION_MIN_BYTES', 1024),
+        'oauth_state_ttl' => env('SYNC_OAUTH_STATE_TTL', 600),
+        'pairing_ttl' => env('SYNC_PAIRING_TTL', 300),
     ],
 
 ];

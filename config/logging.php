@@ -58,6 +58,18 @@ return [
             'ignore_exceptions' => false,
         ],
 
+        // Structured security audit channel: token issuance, revocations,
+        // bulk deletions, quota changes, OAuth flows, repeated auth
+        // failures. Stored separately so it can be shipped to a SIEM
+        // without mixing with application noise.
+        'security' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/security.log'),
+            'level' => env('LOG_SECURITY_LEVEL', 'info'),
+            'days' => env('LOG_SECURITY_DAYS', 90),
+            'replace_placeholders' => false,
+        ],
+
         'single' => [
             'driver' => 'single',
             'path' => storage_path('logs/laravel.log'),

@@ -41,13 +41,18 @@ return [
     | Expiration Minutes
     |--------------------------------------------------------------------------
     |
-    | This value controls the number of minutes until an issued token will be
-    | considered expired. This will override any values set in the token's
-    | "expires_at" attribute, but first-party sessions are not affected.
+    | Midori Sync does NOT issue Sanctum personal access tokens for the
+    | extension or the v1 API. The single source of TTL for sync sessions
+    | is `App\Models\SyncSession` (driven by `SYNC_TOKEN_TTL`, default
+    | 3600s) — see `docs/adr/0002-sanctum-vs-syncsession.md`.
+    |
+    | Sanctum is kept available only for a future SPA dashboard. If that
+    | day comes, set `SANCTUM_TOKEN_EXPIRATION_MINUTES` to a finite value
+    | (e.g. 60) — leaving this `null` would make tokens immortal.
     |
     */
 
-    'expiration' => null,
+    'expiration' => env('SANCTUM_TOKEN_EXPIRATION_MINUTES', null),
 
     /*
     |--------------------------------------------------------------------------

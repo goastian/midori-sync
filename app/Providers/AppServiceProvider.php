@@ -35,5 +35,16 @@ class AppServiceProvider extends ServiceProvider
 
             return Limit::perMinute($limit)->by("sync:{$bucket}:{$owner}");
         });
+
+        // Per-IP throttle for unauthenticated extension endpoints
+        // (auth/start, auth/poll, pair/redeem). Defaults to 30 req/min
+        // and is keyed strictly by IP so a single host cannot brute-force
+        // pairing tokens or sweep poll states.
+        RateLimiter::for('sync-unauth', function (Request $request) {
+            $limit = (int) (config('services.sync.unauth_rate_limit')
+                ?? env('SYNC_UNAUTH_RATE_LIMIT', 30));
+
+            return Limit::perMinute($limit)->by('sync:u:' . $request->ip());
+        });
     }
 }

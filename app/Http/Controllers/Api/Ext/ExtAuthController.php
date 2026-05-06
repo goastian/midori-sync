@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Ext;
 
 use App\Http\Controllers\Controller;
+use App\Support\SecurityLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -20,19 +21,24 @@ class ExtAuthController extends Controller
     public function start(Request $request): JsonResponse
     {
         $state = 'ext_' . Str::random(40);
+        $ttl = (int) config('services.sync.oauth_state_ttl', 600);
 
         Cache::put("ext_auth:{$state}", [
             'device_name' => $request->input('device_name', 'Unknown Device'),
             'device_type' => $request->input('device_type', 'desktop'),
             'device_id' => $request->input('device_id', ''),
             'status' => 'pending',
-        ], now()->addMinutes(10));
+        ], now()->addSeconds($ttl));
 
         $authUrl = Socialite::driver('authentik')
             ->stateless()
             ->with(['state' => $state])
             ->redirect()
             ->getTargetUrl();
+
+        SecurityLog::info(SecurityLog::EVENT_OAUTH_START, [
+            'flow' => 'extension',
+        ], $request);
 
         return response()->json([
             'auth_url' => $authUrl,

@@ -69,8 +69,7 @@ class ScheduledCommandsTest extends TestCase
         ]);
 
         $this->artisan('sync:cleanup-expired')
-            ->expectsOutputToContain('Cleaned up 1 expired records')
-            ->expectsOutputToContain('1 expired sessions')
+            ->expectsOutputToContain('Cleaned up 1 expired records and 1 expired sessions')
             ->assertSuccessful();
 
         $this->assertDatabaseMissing('records', ['record_id' => 'expired']);
