@@ -40,6 +40,9 @@ class DashboardController extends Controller
                 'timestamp' => $record->modified_at * 1000, // Convert to JS timestamp
             ]);
 
+        $rangeParam = (int) $request->query('range', 7);
+        $rangeDays = in_array($rangeParam, [7, 30], true) ? $rangeParam : 7;
+
         return Inertia::render('Dashboard', [
             'stats' => [
                 'device_count' => $devices->count(),
@@ -49,20 +52,21 @@ class DashboardController extends Controller
             ],
             'devices' => $devices,
             'recentActivity' => $recentActivity,
-            'activity7d' => $this->buildActivityHistogram($user->id),
+            'activitySeries' => $this->buildActivityHistogram($user->id, $rangeDays),
+            'activityRange' => $rangeDays,
         ]);
     }
 
     /**
-     * Build a 7-day activity histogram (today and the previous 6 days).
+     * Build a daily activity histogram for the last N days (today and the previous N-1 days).
      *
      * @return array<int, array{date: string, label: string, count: int}>
      */
-    private function buildActivityHistogram(int $userId): array
+    private function buildActivityHistogram(int $userId, int $days): array
     {
         $tz = config('app.timezone', 'UTC');
         $endOfToday = now($tz)->endOfDay();
-        $start = now($tz)->subDays(6)->startOfDay();
+        $start = now($tz)->subDays($days - 1)->startOfDay();
 
         $rows = Record::where('user_id', $userId)
             ->where('modified_at', '>=', $start->getTimestamp())
@@ -74,12 +78,16 @@ class DashboardController extends Controller
             ->map->count();
 
         $series = [];
-        for ($i = 6; $i >= 0; $i--) {
+        for ($i = $days - 1; $i >= 0; $i--) {
             $day = now($tz)->subDays($i)->startOfDay();
             $key = $day->toDateString();
+            // For 30-day view, show only every ~5th day label to avoid crowding
+            $label = $days > 7
+                ? ($i % 5 === 0 ? $day->format('M j') : '')
+                : $day->format('D');
             $series[] = [
                 'date' => $key,
-                'label' => $day->format('D'),
+                'label' => $label,
                 'count' => (int) ($rows[$key] ?? 0),
             ];
         }

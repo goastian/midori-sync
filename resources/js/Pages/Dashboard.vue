@@ -1,21 +1,33 @@
 <script setup>
 import { computed } from 'vue';
+import { router } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 
 const props = defineProps({
     stats: Object,
     devices: Array,
     recentActivity: Array,
-    activity7d: { type: Array, default: () => [] },
+    activitySeries: { type: Array, default: () => [] },
+    activityRange: { type: Number, default: 7 },
 });
 
 const maxActivity = computed(() => {
-    return Math.max(1, ...(props.activity7d || []).map((d) => d.count || 0));
+    return Math.max(1, ...(props.activitySeries || []).map((d) => d.count || 0));
 });
 
-const totalActivity7d = computed(() => {
-    return (props.activity7d || []).reduce((sum, d) => sum + (d.count || 0), 0);
+const totalActivity = computed(() => {
+    return (props.activitySeries || []).reduce((sum, d) => sum + (d.count || 0), 0);
 });
+
+function setRange(days) {
+    if (days === props.activityRange) return;
+    router.get('/dashboard', { range: days }, {
+        preserveScroll: true,
+        preserveState: true,
+        replace: true,
+        only: ['activitySeries', 'activityRange'],
+    });
+}
 
 function formatBytes(bytes) {
     if (!bytes) return '0 B';
@@ -69,18 +81,44 @@ function formatTime(ts) {
             </div>
         </div>
 
-        <!-- 7-day activity chart -->
+        <!-- Activity chart -->
         <div class="mb-8">
-            <div class="flex items-center justify-between mb-3">
-                <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Sync Activity — Last 7 Days</h2>
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ totalActivity7d }} changes</span>
+            <div class="flex items-center justify-between mb-3 gap-3">
+                <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    Sync Activity — Last {{ activityRange }} Days
+                </h2>
+                <div class="flex items-center gap-3">
+                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ totalActivity }} changes</span>
+                    <div class="inline-flex rounded-md border border-gray-200 dark:border-gray-800 overflow-hidden text-xs">
+                        <button
+                            type="button"
+                            @click="setRange(7)"
+                            :class="[
+                                'px-2.5 py-1 transition-colors',
+                                activityRange === 7
+                                    ? 'bg-primary-600 text-white dark:bg-primary-500'
+                                    : 'bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+                            ]"
+                        >7d</button>
+                        <button
+                            type="button"
+                            @click="setRange(30)"
+                            :class="[
+                                'px-2.5 py-1 border-l border-gray-200 dark:border-gray-800 transition-colors',
+                                activityRange === 30
+                                    ? 'bg-primary-600 text-white dark:bg-primary-500'
+                                    : 'bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+                            ]"
+                        >30d</button>
+                    </div>
+                </div>
             </div>
             <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4">
-                <div class="flex items-end justify-between gap-2 h-32">
+                <div class="flex items-end justify-between gap-1 h-32">
                     <div
-                        v-for="day in activity7d"
+                        v-for="day in activitySeries"
                         :key="day.date"
-                        class="flex-1 flex flex-col items-center justify-end gap-2 group"
+                        class="flex-1 flex flex-col items-center justify-end gap-2 group min-w-0"
                     >
                         <span class="text-[10px] text-gray-400 dark:text-gray-500 font-mono opacity-0 group-hover:opacity-100 transition-opacity">
                             {{ day.count }}
@@ -88,9 +126,9 @@ function formatTime(ts) {
                         <div
                             class="w-full rounded-t-md bg-primary-500/80 dark:bg-primary-400/80 group-hover:bg-primary-600 dark:group-hover:bg-primary-300 transition-colors"
                             :style="{ height: (day.count > 0 ? Math.max((day.count / maxActivity) * 100, 4) : 2) + '%' }"
-                            :title="`${day.label} — ${day.count} changes`"
+                            :title="`${day.date} — ${day.count} changes`"
                         />
-                        <span class="text-xs text-gray-500 dark:text-gray-400">{{ day.label }}</span>
+                        <span class="text-[10px] text-gray-500 dark:text-gray-400 truncate w-full text-center">{{ day.label }}</span>
                     </div>
                 </div>
             </div>

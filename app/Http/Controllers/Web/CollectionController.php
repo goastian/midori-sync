@@ -18,20 +18,44 @@ class CollectionController extends Controller
     {
         $user = $request->user();
         $status = $this->storage->getCollectionStatus($user->id);
+        $syncInfo = $this->storage->getSyncInfo($user->id);
 
-        $collections = Collection::all()->map(function ($collection) use ($status) {
+        $usedBytes = (int) ($syncInfo['used_bytes'] ?? 0);
+        $quotaBytes = (int) ($syncInfo['quota_bytes'] ?? 0);
+
+        $collections = Collection::all()->map(function ($collection) use ($status, $usedBytes, $quotaBytes) {
             $stat = $status[$collection->name] ?? null;
+            $sizeBytes = (int) ($stat['size_bytes'] ?? 0);
             return [
                 'id' => $collection->id,
                 'name' => $collection->name,
                 'description' => $collection->description,
                 'record_count' => $stat['record_count'] ?? 0,
                 'last_modified' => $stat['last_modified'] ?? null,
+                'size_bytes' => $sizeBytes,
+                'size_display' => $this->formatBytes($sizeBytes),
+                'percent_of_used' => $usedBytes > 0
+                    ? round(($sizeBytes / $usedBytes) * 100, 1)
+                    : 0,
+                'percent_of_quota' => $quotaBytes > 0
+                    ? round(($sizeBytes / $quotaBytes) * 100, 2)
+                    : 0,
             ];
-        });
+        })->sortByDesc('size_bytes')->values();
 
         return Inertia::render('Collections/Index', [
             'collections' => $collections,
+            'quota' => [
+                'used_bytes' => $usedBytes,
+                'quota_bytes' => $quotaBytes,
+                'used_display' => $this->formatBytes($usedBytes),
+                'quota_display' => $this->formatBytes($quotaBytes),
+                'percent' => $quotaBytes > 0
+                    ? round(($usedBytes / $quotaBytes) * 100, 2)
+                    : 0,
+                'free_bytes' => max(0, $quotaBytes - $usedBytes),
+                'free_display' => $this->formatBytes(max(0, $quotaBytes - $usedBytes)),
+            ],
         ]);
     }
 
