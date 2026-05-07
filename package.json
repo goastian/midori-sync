@@ -21,7 +21,7 @@
         "@inertiajs/vue3": "^3.0.3",
         "@vitejs/plugin-vue": "^6.0.5",
         "lucide-vue-next": "^1.0.0",
-        "vue": "^3.5.32",
+        "vue": "^3.5.34",
         "ziggy-js": "^2.6.2"
     }
 }
