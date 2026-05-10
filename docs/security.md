@@ -1,105 +1,104 @@
 # Midori Sync — Security
 
-> Este documento es el contrato de seguridad vivo del proyecto.
-> Cualquier PR que toque auth, crypto, middleware, CORS, CSP, headers
-> o el storage del seed phrase debe actualizarlo.
+> This document is the project's living security contract.
+> Any PR affecting auth, crypto, middleware, CORS, CSP, headers,
+> or seed phrase storage must update it.
 
 ---
 
-## 1. Modelo de amenazas
+## 1. Threat Model
 
-### 1.1 Activos
+### 1.1 Assets
 
-- **Datos del usuario**: bookmarks, history, tabs, browser-settings,
-  midori-tab, midori-privacy y `passwords`. Todos cifrados E2E.
-- **Seed phrase BIP39 (24 palabras)**: la unica preimagen que permite
-  derivar la master key. Compromiso = perdida total de
-  confidencialidad.
-- **Master key (M)**: derivada del seed via Argon2id; subclaves por
-  coleccion via BLAKE2b (contexto `MSPv1key`).
-- **Sync tokens**: bearer tokens emitidos por el backend; permiten leer
-  ciphertext y meta del usuario (no datos en claro).
-- **Cuentas Authentik**: identidad del usuario; rotacion de credenciales
-  fuera del alcance de Midori Sync.
+- **User data**: bookmarks, history, tabs, browser-settings,
+  midori-tab, midori-privacy, and `passwords`. All E2E encrypted.
+- **BIP39 seed phrase (24 words)**: the only preimage capable of
+  deriving the master key. Compromise = total loss of confidentiality.
+- **Master key (M)**: derived from the seed via Argon2id; per-collection
+  subkeys via BLAKE2b (context `MSPv1key`).
+- **Sync tokens**: bearer tokens issued by the backend; allow access to
+  user ciphertext and metadata (not plaintext data).
+- **Authentik accounts**: user identity; credential rotation is outside
+  the scope of Midori Sync.
 
-### 1.2 Adversarios considerados
+### 1.2 Considered Adversaries
 
-| Adversario                      | Capacidad asumida                              | Mitigacion principal                       |
-|---------------------------------|------------------------------------------------|--------------------------------------------|
-| Operador del backend            | Lee DB, logs y filesystem completos            | E2E: solo ve ciphertext + metadatos        |
-| Atacante en la red              | MITM activo si no hay TLS                      | HTTPS + HSTS en produccion                 |
-| Atacante con acceso al device   | Lee `storage.local` de la extension            | Lock local opcional con passphrase         |
-| Atacante web (CSRF / XSS)       | Inyecta JS en dashboard o paginas internas     | CSP + escape Vue + DOM-safe en extension   |
-| Atacante con extension hostil   | Otra extension con permisos similares          | Origenes CSP estrictos + tokens scoped     |
-| Adversario que roba un token    | Replay del Bearer hasta TTL                    | Hash en DB + TTL + revocacion + auditoria  |
-| Adversario con poder de calculo | Bruteforce offline del seed                    | Argon2id (ops=3, mem=64MB) + 24 palabras   |
+| Adversary                      | Assumed Capability                              | Primary Mitigation                         |
+|--------------------------------|-------------------------------------------------|--------------------------------------------|
+| Backend operator               | Reads full DB, logs, and filesystem             | E2E: only sees ciphertext + metadata       |
+| Network attacker               | Active MITM if TLS is absent                    | HTTPS + HSTS in production                 |
+| Attacker with device access    | Reads extension `storage.local`                 | Optional local lock with passphrase        |
+| Web attacker (CSRF / XSS)      | Injects JS into dashboard or internal pages     | CSP + Vue escaping + DOM-safe extension    |
+| Malicious extension attacker   | Another extension with similar permissions      | Strict CSP origins + scoped tokens         |
+| Token theft adversary          | Bearer replay until TTL expires                 | DB hashing + TTL + revocation + auditing   |
+| High-compute adversary         | Offline seed brute force                        | Argon2id (ops=3, mem=64MB) + 24 words      |
 
-### 1.3 Fuera de alcance
+### 1.3 Out of Scope
 
-- Compromiso del navegador host (keylogger, screen recorder).
-- Compromiso del proveedor de identidad (Authentik) en si mismo.
-- Coercion legal sobre el usuario (la seed esta solo en su device).
-- Side-channel ataques sobre el SO o CPU del cliente.
+- Compromise of the host browser (keylogger, screen recorder).
+- Compromise of the identity provider itself (Authentik).
+- Legal coercion against the user (the seed only exists on the device).
+- Side-channel attacks against the client OS or CPU.
 
 ---
 
-## 2. Cifrado E2E
+## 2. E2E Encryption
 
-Detalle algoritmico completo: [encryption.md](encryption.md).
-Resumen de invariantes:
+Full algorithmic details: [encryption.md](encryption.md).
+Invariant summary:
 
-- **KDF**: Argon2id (`ops=3`, `mem=64 MB`) sobre el seed BIP39 + salt
-  fijo dependiente del bundle, ejecutado en Web Worker dedicado
-  (`extension/lib/argon2-worker.js`) con fallback sincrono.
-- **Subclaves por coleccion**: BLAKE2b con contexto `MSPv1key` y
-  `subkey_id = COLLECTION_INDEX[name]`. Indices estables; un cambio
-  rompe descifrado de datos existentes.
-- **AEAD**: XChaCha20-Poly1305. Layout del payload subido al backend:
+- **KDF**: Argon2id (`ops=3`, `mem=64 MB`) over the BIP39 seed +
+  bundle-dependent fixed salt, executed in a dedicated Web Worker
+  (`extension/lib/argon2-worker.js`) with synchronous fallback.
+- **Per-collection subkeys**: BLAKE2b with context `MSPv1key` and
+  `subkey_id = COLLECTION_INDEX[name]`. Indices are stable; changing
+  them breaks decryption of existing data.
+- **AEAD**: XChaCha20-Poly1305. Backend upload payload layout:
   `base64(nonce(24) || ciphertext || tag(16))`.
-- **Lock local**: bundle `M` cifrado con passphrase via Argon2id +
-  contexto KDF `MSPv1lck` (distinto de `MSPv1key`).
-- **Rotacion de master key**: incremental, con cursor reanudable y
-  fallback de descifrado a `M_old` durante estados mixtos. Procedimiento
-  documentado en [encryption.md](encryption.md) y
+- **Local lock**: `M` bundle encrypted with passphrase via Argon2id +
+  KDF context `MSPv1lck` (distinct from `MSPv1key`).
+- **Master key rotation**: incremental, resumable cursor-based rotation
+  with fallback decryption to `M_old` during mixed states. Procedure
+  documented in [encryption.md](encryption.md) and
   [runbooks.md](runbooks.md).
 
-El backend NUNCA tiene acceso a la seed, a `M`, a las subclaves ni al
-plaintext.
+The backend NEVER has access to the seed, `M`, subkeys, or plaintext.
 
 ---
 
-## 3. Autenticacion y sesiones
+## 3. Authentication and Sessions
 
-### 3.1 Capas
+### 3.1 Layers
 
-- **Authentik (OIDC)**: identidad del usuario, login del dashboard,
-  base del flujo OAuth de la extension (`/api/ext/auth/start`,
+- **Authentik (OIDC)**: user identity, dashboard login,
+  foundation of the extension OAuth flow (`/api/ext/auth/start`,
   `/api/ext/auth/poll`).
-- **`SyncSession`** (ADR-002): unica capa de auth para `/api/v1` y
-  `/api/ext`. Tokens bearer con TTL configurable (`SYNC_TOKEN_TTL`).
-- **Sanctum**: presente como utilidad para un futuro API SPA del
-  dashboard. NO se usa para sync.
+- **`SyncSession`** (ADR-002): single auth layer for `/api/v1` and
+  `/api/ext`. Bearer tokens with configurable TTL (`SYNC_TOKEN_TTL`).
+- **Sanctum**: present as a utility for a future dashboard SPA API.
+  NOT used for sync.
 
 ### 3.2 Tokens
 
-- Hash en reposo: SHA-256. La DB nunca almacena el bearer en claro.
-- TTL: configurable; default 30 dias. Cleanup horario via
+- At-rest hashing: SHA-256. The DB never stores bearer tokens in
+  plaintext.
+- TTL: configurable; default 30 days. Hourly cleanup via
   `sync:cleanup-expired`.
-- Revocacion individual y bulk-por-usuario disponibles desde el
-  dashboard (`Audit/Index`) y la extension (revoke device).
-- Auditoria: IP, User-Agent (truncado), `last_used_at`, `last_seen_ip`.
+- Individual and bulk-per-user revocation available from the
+  dashboard (`Audit/Index`) and extension (device revoke).
+- Auditing: IP, truncated User-Agent, `last_used_at`, `last_seen_ip`.
 
-### 3.3 Pairing manual
+### 3.3 Manual Pairing
 
-`/api/ext/pair` -> `/api/ext/pair/redeem` con codigo de un solo uso,
-expiracion corta (TTL configurable) y proteccion contra replay
+`/api/ext/pair` -> `/api/ext/pair/redeem` using a single-use code,
+short expiration (configurable TTL), and replay protection
 (`PairingFlowTest`).
 
 ---
 
-## 4. Headers y politicas web
+## 4. Headers and Web Policies
 
-### 4.1 nginx (produccion, `nginx.prod.conf`)
+### 4.1 nginx (production, `nginx.prod.conf`)
 
 - `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`
 - `Content-Security-Policy`: `default-src 'self'; script-src 'self';
@@ -108,24 +107,25 @@ expiracion corta (TTL configurable) y proteccion contra replay
 - `X-Frame-Options: DENY`
 - `X-Content-Type-Options: nosniff`
 - `Referrer-Policy: strict-origin-when-cross-origin`
-- `Permissions-Policy`: deshabilita microfono, camara, geolocalizacion.
+- `Permissions-Policy`: disables microphone, camera, and geolocation.
 
-> Estado actual: HSTS y CSP son TODO abierto en `docker/nginx.conf`
-> (Bloque 2 / Fase 7). Ver [plan-status.md](plan-status.md).
+> Current status: HSTS and CSP are currently TODO/open in
+> `docker/nginx.conf` (Block 2 / Phase 7). See
+> [plan-status.md](plan-status.md).
 
 ### 4.2 CORS (`CorsForExtension`)
 
-- Whitelisting por configuracion `CORS_ALLOWED_ORIGINS` (TODO: hoy
-  `*`).
-- Preflight: `OPTIONS` responde solo con headers permitidos.
-- Echo de `Origin` solo si pertenece a la lista.
-- Origenes esperados:
-  `moz-extension://<uuid>`, dominio del dashboard,
+- Config-based whitelisting via `CORS_ALLOWED_ORIGINS`
+  (TODO: currently `*`).
+- Preflight: `OPTIONS` responds only with allowed headers.
+- `Origin` echo only if present in the allowlist.
+- Expected origins:
+  `moz-extension://<uuid>`, dashboard domain,
   `https://accounts.astian.org`.
 
-### 4.3 Extension (CSP en `manifest.json` + meta tags)
+### 4.3 Extension (CSP in `manifest.json` + meta tags)
 
-```
+```text
 script-src 'self';
 object-src 'self';
 connect-src 'self' http://localhost:8000 https://sync.astian.org https://accounts.astian.org;
@@ -134,75 +134,76 @@ img-src 'self' data: https:;
 default-src 'self';
 ```
 
-Meta `Content-Security-Policy` replicada en `options/options.html`,
-`popup/popup.html`, `setup/setup.html`.
+`Content-Security-Policy` meta tag replicated in
+`options/options.html`, `popup/popup.html`,
+`setup/setup.html`.
 
 ---
 
-## 5. Rate limiting y quotas
+## 5. Rate Limiting and Quotas
 
-- Rate limiter `sync` con buckets independientes:
-  - `sync:r:*` (lectura, `SYNC_RATE_LIMIT_READ`).
-  - `sync:w:*` (escritura, `SYNC_RATE_LIMIT_WRITE`).
-- Cobertura: `RateLimitTest`.
-- Quota por usuario via `EnforceQuota`. Tombstones excluidos del
-  computo. GETs exentos. Cobertura: `EnforceQuotaTest`.
-
----
-
-## 6. Storage del cliente y lock local
-
-- Seed phrase y master key viven en `browser.storage.local`. Sin lock
-  local estan en claro (mitigacion: solo accesibles por la extension
-  misma; CSP impide inyeccion externa).
-- Lock local opcional: el usuario activa una passphrase; el seed y `M`
-  se borran de `storage.local` y solo queda `lockBundle` cifrado bajo
-  contexto `MSPv1lck`.
-- Lock por inactividad: alarm con timeout configurable (default 15 min).
-- Unlock requiere derivar Argon2id desde la passphrase; mismas
-  parametrizaciones que la KDF principal.
+- `sync` rate limiter with independent buckets:
+  - `sync:r:*` (read, `SYNC_RATE_LIMIT_READ`).
+  - `sync:w:*` (write, `SYNC_RATE_LIMIT_WRITE`).
+- Coverage: `RateLimitTest`.
+- Per-user quota via `EnforceQuota`. Tombstones excluded from
+  accounting. GET requests exempt. Coverage: `EnforceQuotaTest`.
 
 ---
 
-## 7. Logging y auditoria
+## 6. Client Storage and Local Lock
 
-- Eventos sensibles que DEBEN loguearse de forma estructurada (TODO
-  parcial — Bloque 2 abierto):
+- Seed phrase and master key live in `browser.storage.local`. Without
+  local lock they remain in plaintext (mitigation: only accessible by
+  the extension itself; CSP prevents external injection).
+- Optional local lock: the user enables a passphrase; the seed and `M`
+  are removed from `storage.local` and only an encrypted `lockBundle`
+  remains under context `MSPv1lck`.
+- Idle lock: alarm with configurable timeout (default 15 min).
+- Unlock requires Argon2id derivation from the passphrase using the
+  same parameters as the primary KDF.
+
+---
+
+## 7. Logging and Auditing
+
+- Sensitive events that MUST be logged in structured form
+  (partial TODO — Block 2 still open):
   - login / logout / pairing / OAuth complete.
-  - revocacion de token (single y bulk).
-  - cambios de cuota.
-  - borrado de coleccion / borrado total.
-  - fallos repetidos de auth (>=N en M minutos).
-- Auditoria visible al usuario: `Audit/Index` lista sesiones activas y
-  expiradas con IP, UA, device y permite revoke individual y revoke-all.
+  - token revocation (single and bulk).
+  - quota changes.
+  - collection deletion / full wipe.
+  - repeated auth failures (>=N within M minutes).
+- User-visible auditing: `Audit/Index` lists active and expired
+  sessions with IP, UA, device, and allows individual or global revoke.
 
 ---
 
-## 8. Dependencias
+## 8. Dependencies
 
-- `composer audit` y `npm audit` deben correr en CI por PR (TODO
-  abierto en Fase 7).
-- Dependabot recomendado para PRs automatizados de seguridad.
-- SBOM: pendiente (`syft` u OWASP Dependency-Track) — Fase 8.
-
----
-
-## 9. Reporte de vulnerabilidades
-
-Ver [SECURITY.md](../SECURITY.md) en raiz del repo. Resumen:
-
-- NO abrir issue publica.
-- Email a `security@astian.org` (PGP en `.well-known/security.txt`).
-- Triage objetivo: <72h. Fix objetivo: <30 dias para criticas.
+- `composer audit` and `npm audit` must run in CI for every PR
+  (TODO still open in Phase 7).
+- Dependabot recommended for automated security PRs.
+- SBOM pending (`syft` or OWASP Dependency-Track) — Phase 8.
 
 ---
 
-## 10. Cambios que requieren ADR
+## 9. Vulnerability Reporting
 
-Cualquier cambio en estas areas requiere ADR en `docs/adr/`:
+See [SECURITY.md](../SECURITY.md) at the repository root. Summary:
 
-- KDF, AEAD, layout del payload o `COLLECTION_INDEX`.
-- Capa de auth (`SyncSession`, Sanctum, Authentik).
-- CORS / CSP / HSTS / headers de seguridad.
-- Storage shape de la extension (seed, lockBundle, rotationState).
-- Contrato `/api/v1` o `/api/ext` con impacto retrocompatible.
+- DO NOT open a public issue.
+- Email `security@astian.org` (PGP in `.well-known/security.txt`).
+- Target triage: <72h. Target fix: <30 days for critical issues.
+
+---
+
+## 10. Changes Requiring an ADR
+
+Any change in these areas requires an ADR under `docs/adr/`:
+
+- KDF, AEAD, payload layout, or `COLLECTION_INDEX`.
+- Auth layer (`SyncSession`, Sanctum, Authentik).
+- CORS / CSP / HSTS / security headers.
+- Extension storage shape (seed, `lockBundle`, `rotationState`).
+- `/api/v1` or `/api/ext` contracts with backward compatibility impact.
