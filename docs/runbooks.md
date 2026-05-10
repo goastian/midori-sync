@@ -1,142 +1,146 @@
-# Midori Sync — Runbooks y SLOs
+# Midori Sync — Runbooks and SLOs
 
-> Procedimientos operativos para incidentes, mantenimiento programado y
-> rotaciones criticas. Audiencia: operadores del backend Midori Sync.
-> Para arquitectura ver [architecture.md](architecture.md); para
-> seguridad ver [security.md](security.md).
+> Operational procedures for incidents, scheduled maintenance, and
+> critical rotations. Audience: Midori Sync backend operators.
+> For architecture see [architecture.md](architecture.md); for
+> security see [security.md](security.md).
 
 ---
 
 ## 1. SLOs
 
-### 1.1 Disponibilidad
+### 1.1 Availability
 
-| Servicio                         | SLO    | Ventana    | Notas                                |
-|----------------------------------|--------|------------|--------------------------------------|
-| `/api/v1/sync/info` (read)       | 99.9%  | 30 dias    | Critico para funcionamiento basico.  |
-| `/api/v1/collections/*` (read)   | 99.9%  | 30 dias    | Critico.                             |
-| `/api/v1/collections/*` (write)  | 99.5%  | 30 dias    | Tolera mas degradacion bajo carga.   |
-| `/api/ext/auth/*` y `/api/ext/pair/*` | 99.5% | 30 dias | Pairing/OAuth de la extension.       |
-| Dashboard web                    | 99.0%  | 30 dias    | Acceso UI, no bloquea sync.          |
+| Service                                  | SLO    | Window     | Notes                                 |
+|------------------------------------------|--------|------------|---------------------------------------|
+| `/api/v1/sync/info` (read)               | 99.9%  | 30 days    | Critical for core functionality.      |
+| `/api/v1/collections/*` (read)           | 99.9%  | 30 days    | Critical.                             |
+| `/api/v1/collections/*` (write)          | 99.5%  | 30 days    | Tolerates more degradation under load.|
+| `/api/ext/auth/*` and `/api/ext/pair/*`  | 99.5%  | 30 days    | Extension pairing/OAuth.              |
+| Web dashboard                            | 99.0%  | 30 days    | UI access, does not block sync.       |
 
-### 1.2 Latencia (p95)
+### 1.2 Latency (p95)
 
-| Operacion                    | SLO p95   | Notas                              |
-|------------------------------|-----------|------------------------------------|
-| GET `/sync/info`             | < 150 ms  | Solo metadatos.                    |
-| GET `/collections/{name}`    | < 400 ms  | Hasta 1000 records con ETag hit.   |
-| POST `/collections/{name}`   | < 600 ms  | Batch UPSERT hasta 500 records.    |
-| OAuth poll                   | < 250 ms  | Lookup en Redis.                   |
+| Operation                   | p95 SLO   | Notes                               |
+|-----------------------------|------------|-------------------------------------|
+| GET `/sync/info`            | < 150 ms   | Metadata only.                      |
+| GET `/collections/{name}`   | < 400 ms   | Up to 1000 records with ETag hit.   |
+| POST `/collections/{name}`  | < 600 ms   | Batch UPSERT up to 500 records.     |
+| OAuth poll                  | < 250 ms   | Redis lookup.                       |
 
-### 1.3 Durabilidad
+### 1.3 Durability
 
-- DB PostgreSQL: backups diarios, retencion 30 dias, restore probado
-  trimestralmente.
-- Records con `deleted = true` (tombstones) retenidos 90 dias antes de
-  purga definitiva.
+- PostgreSQL DB: daily backups, 30-day retention, restore tested
+  quarterly.
+- Records with `deleted = true` (tombstones) retained for 90 days
+  before permanent purge.
 
-### 1.4 Error budget
+### 1.4 Error Budget
 
-- Disponibilidad 99.9% sobre 30 dias = ~43 minutos de downtime tolerado.
-- Si en una semana se consume >50% del budget mensual, congelar
-  releases hasta resolver causas raiz.
+- 99.9% availability over 30 days = ~43 minutes of tolerated downtime.
+- If more than 50% of the monthly budget is consumed within a week,
+  freeze releases until root causes are resolved.
 
 ---
 
-## 2. Runbook: rotacion de master key (cliente)
+## 2. Runbook: Master Key Rotation (Client)
 
-> Esta rotacion es iniciada por el usuario desde `options/` de la
-> extension. Operacion sin downtime, no requiere accion del operador
-> backend salvo monitoreo.
+> This rotation is initiated by the user from the extension `options/`
+> page. Zero-downtime operation, requiring no backend operator action
+> other than monitoring.
 
 ### 2.1 Pre-flight
 
-1. Usuario verifica que tiene la seed phrase actual (M_old) accesible.
-2. Extension genera seed nueva (24 palabras BIP39) y deriva M_new
-   en Web Worker.
-3. UI muestra preview con la seed nueva y pide confirmacion explicita.
+1. User verifies they still have access to the current seed phrase
+   (`M_old`).
+2. Extension generates a new seed (24-word BIP39) and derives `M_new`
+   in a Web Worker.
+3. UI displays a preview of the new seed and requests explicit
+   confirmation.
 
-### 2.2 Ejecucion
+### 2.2 Execution
 
-1. Persiste `rotationState = { newMnemonic, newKeyB64, completed: [], currentCollection }`
-   en `storage.local`.
-2. Mantiene `previousEncryptionKey = M_old` mientras dure la rotacion.
-3. Por cada coleccion en orden estable:
-   - Full scan de records remotos via GET `/collections/{name}`.
-   - Descifra con M_old, re-cifra con M_new (mismo `collectionIndex`).
-   - PUT batch con ciphertext nuevo.
-   - Marca coleccion en `completed[]`.
-4. Al terminar todas:
-   - Reemplaza `encryptionKey` con M_new.
-   - Borra `previousEncryptionKey` y `rotationState`.
+1. Persist
+   `rotationState = { newMnemonic, newKeyB64, completed: [], currentCollection }`
+   in `storage.local`.
+2. Keep `previousEncryptionKey = M_old` during the entire rotation.
+3. For each collection in stable order:
+   - Full scan of remote records via GET `/collections/{name}`.
+   - Decrypt with `M_old`, re-encrypt with `M_new`
+     (same `collectionIndex`).
+   - Batch PUT with new ciphertext.
+   - Mark collection in `completed[]`.
+4. After all collections complete:
+   - Replace `encryptionKey` with `M_new`.
+   - Remove `previousEncryptionKey` and `rotationState`.
 
-### 2.3 Resume tras crash
+### 2.3 Resume After Crash
 
-`getRotationStatus` lee `rotationState`. Si existe, options muestra
-"Resume rotation". El handler reanuda desde `currentCollection` sin
-reprompts.
+`getRotationStatus` reads `rotationState`. If present, options UI shows
+"Resume rotation". The handler resumes from `currentCollection` without
+re-prompting the user.
 
-### 2.4 Fallback de descifrado
+### 2.4 Decryption Fallback
 
-Durante estados mixtos, `decryptBsoPayload` intenta primero con la
-clave activa y, si falla AEAD, reintenta con `previousEncryptionKey`.
+During mixed states, `decryptBsoPayload` first attempts the active key
+and, if AEAD validation fails, retries with
+`previousEncryptionKey`.
 
-### 2.5 Monitoreo backend
+### 2.5 Backend Monitoring
 
-- Picos de PUTs sobre todas las colecciones de un usuario son
-  esperables.
-- Si rate limit `sync:w:*` golpea durante rotacion, considerar elevar
-  `SYNC_RATE_LIMIT_WRITE` para el usuario afectado.
+- Spikes in PUT requests across all collections for a user are
+  expected.
+- If the `sync:w:*` rate limit is hit during rotation, consider
+  temporarily increasing `SYNC_RATE_LIMIT_WRITE` for the affected user.
 
 ---
 
-## 3. Runbook: revocacion masiva de tokens (incidente de seguridad)
+## 3. Runbook: Bulk Token Revocation (Security Incident)
 
 ### 3.1 Trigger
 
-- Filtracion confirmada de bearer tokens.
-- Compromiso de DB.
-- Solicitud explicita del usuario via dashboard.
+- Confirmed bearer token leak.
+- Database compromise.
+- Explicit user request through the dashboard.
 
-### 3.2 Pasos
+### 3.2 Steps
 
-1. Operador ingresa al dashboard como admin (o tinker).
-2. Para un usuario:
+1. Operator accesses the dashboard as admin (or via tinker).
+2. For a single user:
    ```bash
    php artisan tinker
    >>> app(\App\Services\SyncAuthService::class)->revokeAllForUser($userId);
    ```
-3. Para todos los usuarios (incidente global):
+3. For all users (global incident):
    ```bash
    php artisan tinker
    >>> \App\Models\SyncSession::query()->update(['revoked_at' => now()]);
    ```
-4. Forzar cleanup inmediato:
+4. Force immediate cleanup:
    ```bash
    php artisan sync:cleanup-expired
    ```
-5. Notificar a usuarios via canal externo (email).
-6. Las extensiones detectan `token_expired` y disparan re-pairing.
+5. Notify users through an external channel (email).
+6. Extensions detect `token_expired` and trigger re-pairing.
 
 ### 3.3 Post-mortem
 
-- Documentar en `docs/adr/` si la causa raiz requiere cambio de
-  contrato.
-- Actualizar `CHANGELOG.md` con advisory.
+- Document in `docs/adr/` if the root cause requires a contract change.
+- Update `CHANGELOG.md` with an advisory.
 
 ---
 
-## 4. Runbook: backup y restore PostgreSQL
+## 4. Runbook: PostgreSQL Backup and Restore
 
-### 4.1 Backup diario
+### 4.1 Daily Backup
 
 ```bash
-# Asume contenedor docker compose service "postgres"
+# Assumes docker compose service "postgres"
 docker compose exec postgres pg_dump -U midori_sync midori_sync \
   | gzip > backups/midori-sync-$(date +%F).sql.gz
 ```
 
-Retencion: 30 dias rolling.
+Retention: rolling 30 days.
 
 ### 4.2 Restore
 
@@ -145,85 +149,86 @@ gunzip -c backups/midori-sync-2026-05-06.sql.gz \
   | docker compose exec -T postgres psql -U midori_sync midori_sync
 ```
 
-Tras restore:
+After restore:
 
 ```bash
-php artisan migrate                    # idempotente
-php artisan sync:recalculate-usage     # recompone quotas
+php artisan migrate                    # idempotent
+php artisan sync:recalculate-usage     # rebuild quotas
 ```
 
-### 4.3 Test de restore
+### 4.3 Restore Testing
 
-Trimestral. Restore en entorno staging y correr `composer test
---testsuite=Feature`. Documentar resultado.
+Quarterly. Restore into staging environment and run
+`composer test --testsuite=Feature`. Document results.
 
 ---
 
-## 5. Runbook: cleanup de datos huerfanos
+## 5. Runbook: Orphaned Data Cleanup
 
-### 5.1 Tokens expirados
+### 5.1 Expired Tokens
 
-- Comando programado: `sync:cleanup-expired` (horario).
+- Scheduled command: `sync:cleanup-expired` (hourly).
 - Manual:
   ```bash
   php artisan sync:cleanup-expired
   ```
 
-### 5.2 Records tombstone vencidos
+### 5.2 Expired Tombstone Records
 
-- Tombstones >90 dias se purgan via tarea programada (TODO: agregar
-  comando si no existe).
+- Tombstones older than 90 days are purged through a scheduled task
+  (TODO: add command if missing).
 
-### 5.3 Recalculo de uso
+### 5.3 Usage Recalculation
 
 ```bash
 php artisan sync:recalculate-usage
 ```
 
-Usar tras restore, migracion grande o si las cifras de cuota divergen.
+Use after restore, large migration, or if quota metrics diverge.
 
 ---
 
-## 6. Runbook: monitoreo de salud
+## 6. Runbook: Health Monitoring
 
-### 6.1 Endpoints / canales
+### 6.1 Endpoints / Channels
 
-- `GET /up` (Laravel default) — 200 OK indica app viva.
-- Logs estructurados en `storage/logs/laravel.log` (TODO: pasar a
-  stdout en produccion para que Docker / journald los capture).
+- `GET /up` (Laravel default) — 200 OK indicates the app is alive.
+- Structured logs in `storage/logs/laravel.log`
+  (TODO: move to stdout in production so Docker/journald can capture
+  them).
 - Redis: `redis-cli ping`.
 - PostgreSQL: `pg_isready`.
 
-### 6.2 Alertas recomendadas
+### 6.2 Recommended Alerts
 
-| Alerta                                         | Umbral                  | Severidad |
-|------------------------------------------------|-------------------------|-----------|
-| Tasa de 5xx en `/api/*`                        | >1% sobre 5 min         | High      |
-| Latencia p95 `/collections/*` write            | >1s sobre 10 min        | High      |
-| Rate limit hits >X% del trafico                | >5% sobre 15 min        | Medium    |
-| Token validation failures spike                | x10 sobre baseline 24h  | High      |
-| Disk free PostgreSQL                           | <15%                    | High      |
-| Redis memoria                                  | >80% maxmemory          | Medium    |
-| Backups diarios fallando                       | 1 fallo                 | Critical  |
+| Alert                                           | Threshold               | Severity |
+|-------------------------------------------------|-------------------------|-----------|
+| 5xx rate on `/api/*`                            | >1% over 5 min          | High      |
+| p95 latency `/collections/*` write              | >1s over 10 min         | High      |
+| Rate limit hits >X% of traffic                  | >5% over 15 min         | Medium    |
+| Token validation failures spike                 | x10 over 24h baseline   | High      |
+| PostgreSQL free disk space                      | <15%                    | High      |
+| Redis memory usage                              | >80% maxmemory          | Medium    |
+| Daily backups failing                           | 1 failure               | Critical  |
 
 ### 6.3 On-call
 
-- Rotacion semanal documentada en el sistema interno del operador.
-- Runbook primero, escalar a maintainer si excede 1h sin progreso.
+- Weekly rotation documented in the operator internal system.
+- Runbook first, escalate to maintainer if unresolved after 1 hour.
 
 ---
 
-## 7. Runbook: deploy
+## 7. Runbook: Deploy
 
-Ver [deployment.md](deployment.md) para detalles de imagen Docker y
-configuracion.
+See [deployment.md](deployment.md) for Docker image and configuration
+details.
 
-### 7.1 Pre-deploy checklist
+### 7.1 Pre-deploy Checklist
 
-- [ ] CI verde en `main`.
-- [ ] `composer audit` y `npm audit` sin criticos.
-- [ ] `CHANGELOG.md` actualizado.
-- [ ] Migraciones revisadas (no destructivas o con plan documentado).
+- [ ] CI green on `main`.
+- [ ] `composer audit` and `npm audit` without critical findings.
+- [ ] `CHANGELOG.md` updated.
+- [ ] Migrations reviewed (non-destructive or documented rollback plan).
 
 ### 7.2 Deploy
 
@@ -237,19 +242,19 @@ docker compose exec app php artisan route:cache
 
 ### 7.3 Rollback
 
-- Volver al tag anterior del image registry.
-- Si hubo migracion no reversible, restaurar backup + replay del WAL
-  hasta antes del deploy.
+- Revert to the previous image registry tag.
+- If a non-reversible migration occurred, restore backup + replay WAL
+  up to the point before deploy.
 
 ---
 
-## 8. Runbook: incidente de cuota
+## 8. Runbook: Quota Incident
 
-### 8.1 Sintoma
+### 8.1 Symptom
 
-Usuario reporta 403 con `quota_exceeded` pese a haber borrado datos.
+User reports 403 with `quota_exceeded` despite deleting data.
 
-### 8.2 Diagnostico
+### 8.2 Diagnosis
 
 ```bash
 php artisan tinker
@@ -257,51 +262,52 @@ php artisan tinker
 >>> \App\Models\User::find($id)->storage_used
 ```
 
-Si divergen, recalcular:
+If values diverge, recalculate:
 
 ```bash
 php artisan sync:recalculate-usage --user=$id
 ```
 
-### 8.3 Mitigacion temporal
+### 8.3 Temporary Mitigation
 
-Elevar quota del usuario via dashboard o comando, documentar en
-ticket.
+Increase the user's quota through the dashboard or command, and
+document it in the ticket.
 
 ---
 
-## 9. Runbook: rotacion de credenciales (operador)
+## 9. Runbook: Credential Rotation (Operator)
 
-### 9.1 `APP_KEY` Laravel
+### 9.1 Laravel `APP_KEY`
 
-NO rotar sin plan: invalida sesiones cifradas y cookies. Si necesario:
+DO NOT rotate without a plan: it invalidates encrypted sessions and
+cookies. If necessary:
 
-1. Sacar trafico via maintenance mode (`php artisan down`).
+1. Remove traffic via maintenance mode (`php artisan down`).
 2. `php artisan key:generate`.
-3. Invalidar sesiones (`SyncSession`s no afectadas, son tokens
-   independientes).
+3. Invalidate sessions (`SyncSession`s are unaffected since they are
+   independent tokens).
 4. `php artisan up`.
 
-### 9.2 Credenciales DB / Redis
+### 9.2 DB / Redis Credentials
 
-1. Crear nuevo usuario con permisos identicos.
+1. Create new user with identical permissions.
 2. Update `.env`.
-3. Rolling restart de app.
-4. Drop usuario antiguo.
+3. Rolling restart of the app.
+4. Drop old user.
 
-### 9.3 Authentik client secret
+### 9.3 Authentik Client Secret
 
-1. Rotar en Authentik.
+1. Rotate in Authentik.
 2. Update `.env` (`AUTHENTIK_CLIENT_SECRET`).
-3. Rolling restart. Logins existentes siguen validos via cookie de
-   sesion; nuevos OAuth flows usan el secret nuevo.
+3. Rolling restart. Existing logins remain valid through the session
+   cookie; new OAuth flows use the new secret.
 
 ---
 
-## 10. Indice de comandos
+## 10. Command Index
 
 ```bash
-# Salud
+# Health
 php artisan about
 php artisan migrate:status
 
@@ -313,6 +319,6 @@ php artisan sync:recalculate-usage
 composer test
 npm test
 
-# Tinker (admin ad-hoc)
+# Tinker (ad-hoc admin)
 php artisan tinker
 ```
