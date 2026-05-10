@@ -1,29 +1,28 @@
 # Contributing to Midori Sync
 
-> Gracias por contribuir. Esta guia define como preparar el entorno,
-> los estandares de codigo y el flujo de PR. Para arquitectura y
-> seguridad ver [architecture.md](architecture.md) y
+> Thank you for contributing. This guide defines how to prepare the
+> environment, coding standards, and the PR workflow. For architecture
+> and security see [architecture.md](architecture.md) and
 > [security.md](security.md).
 
 ---
 
-## 1. Codigo de conducta
+## 1. Code of Conduct
 
-Tratar con respeto a otros contribuidores. Reportes de conducta
-inapropiada o vulnerabilidades de seguridad: ver `SECURITY.md` en la
-raiz del repo.
+Treat other contributors with respect. Reports of inappropriate conduct
+or security vulnerabilities: see `SECURITY.md` at the repository root.
 
 ---
 
-## 2. Setup local
+## 2. Local Setup
 
-### Requisitos
+### Requirements
 
 - PHP 8.3+
 - Composer 2
 - Node.js 20+
-- Docker + Docker Compose (recomendado para PostgreSQL 17 + Redis 7)
-- Firefox o Midori Browser para probar la extension
+- Docker + Docker Compose (recommended for PostgreSQL 17 + Redis 7)
+- Firefox or Midori Browser to test the extension
 
 ### Bootstrap
 
@@ -33,49 +32,52 @@ cd midori-sync
 cp .env.example .env
 composer install
 npm install
-docker compose up -d        # postgres, redis, nginx (opcional)
+docker compose up -d        # postgres, redis, nginx (optional)
 php artisan key:generate
 php artisan migrate --seed
 php artisan serve
 npm run dev                 # Vite + Inertia HMR
 ```
 
-Para la extension ver [extension-dev.md](extension-dev.md).
+For the extension see [extension-dev.md](extension-dev.md).
 
 ---
 
-## 3. Estandares de codigo
+## 3. Coding Standards
 
 ### PHP / Laravel
 
-- Convenciones Laravel 12 (controllers en `app/Http/Controllers`, Form
-  Requests en `app/Http/Requests`, servicios en `app/Services`).
-- Tipado estricto cuando sea posible (`declare(strict_types=1)` no es
-  obligatorio aun, pero todo codigo nuevo debe usar typed properties y
-  return types).
-- Nombres de migraciones: `YYYY_MM_DD_HHMMSS_<verb>_<subject>`.
-- Cambios en endpoints publicos requieren actualizar
-  [docs/api.md](api.md) y, si aplica, [docs/protocol.md](protocol.md)
-  con un ADR si rompe compatibilidad.
+- Laravel 12 conventions (`app/Http/Controllers` for controllers,
+  `app/Http/Requests` for Form Requests, services in `app/Services`).
+- Strict typing whenever possible (`declare(strict_types=1)` is not
+  mandatory yet, but all new code must use typed properties and return
+  types).
+- Migration naming:
+  `YYYY_MM_DD_HHMMSS_<verb>_<subject>`.
+- Changes to public endpoints require updating
+  [docs/api.md](api.md) and, if applicable,
+  [docs/protocol.md](protocol.md) with an ADR if compatibility is
+  broken.
 
 ### JavaScript / Vue
 
-- ES modules en `resources/js/`, scripts clasicos en `extension/`
-  (manifest MV2). No mezclar.
-- Vue 3 Composition API + `<script setup>`. Inertia para navegacion.
-- Tailwind para estilos. Dark mode via clase `dark:` y composable
-  `useTheme`.
-- En la extension: NO `innerHTML` con strings server-controlled. Usar
-  `textContent` y DOM API.
+- ES modules in `resources/js/`, classic scripts in `extension/`
+  (MV2 manifest). Do not mix them.
+- Vue 3 Composition API + `<script setup>`. Inertia for navigation.
+- Tailwind for styling. Dark mode via the `dark:` class and the
+  `useTheme` composable.
+- In the extension: NO `innerHTML` with server-controlled strings. Use
+  `textContent` and the DOM API.
 
 ### Crypto
 
-- Cualquier cambio en `extension/lib/midori-sync-crypto.js`,
-  `COLLECTION_INDEX` o layout del payload requiere:
-  1. ADR en `docs/adr/`.
-  2. Actualizacion de [docs/encryption.md](encryption.md).
-  3. Tests en `tests/crypto.test.js` (incluir property tests).
-  4. Plan de migracion para datos existentes si rompe compat.
+- Any change to `extension/lib/midori-sync-crypto.js`,
+  `COLLECTION_INDEX`, or payload layout requires:
+  1. ADR in `docs/adr/`.
+  2. Update to [docs/encryption.md](encryption.md).
+  3. Tests in `tests/crypto.test.js`
+     (including property tests).
+  4. Migration plan for existing data if compatibility is broken.
 
 ---
 
@@ -86,113 +88,118 @@ Para la extension ver [extension-dev.md](extension-dev.md).
 composer test
 php artisan test --testsuite=Feature
 
-# JS (incluye extension/tests/)
+# JS (includes extension/tests/)
 npm test
 
-# Vitest interactivo
+# Interactive Vitest
 npx vitest
 
-# Test puntual
+# Specific test
 php artisan test --filter=SyncAuthServiceTest
 npx vitest run tests/crypto.test.js
 ```
 
-### Cuando agregar tests
+### When to Add Tests
 
-- Endpoint nuevo: test Feature en `tests/Feature/`.
-- Servicio nuevo: test unitario en `tests/Unit/` + integracion en
-  Feature si toca DB.
-- Adapter de extension: test en `extension/tests/adapters.test.js`.
-- Handler de background: test en `extension/tests/sync-engine.test.js`.
-- Cambio en crypto: test en `tests/crypto.test.js` con property tests.
+- New endpoint: Feature test under `tests/Feature/`.
+- New service: unit test under `tests/Unit/` + Feature integration test
+  if DB interaction exists.
+- Extension adapter: test in
+  `extension/tests/adapters.test.js`.
+- Background handler: test in
+  `extension/tests/sync-engine.test.js`.
+- Crypto change: test in `tests/crypto.test.js` with property tests.
 
-### Politica
+### Policy
 
-- No bajar coverage neto.
-- Tests deterministas. Para timing usar `Carbon::setTestNow()` o
-  `vi.useFakeTimers()`.
-- Para flujos OAuth/Socialite, mockear el provider con Mockery (no
-  llamar Authentik real).
-
----
-
-## 5. Documentacion
-
-Todo PR que afecte uno de estos contratos debe actualizar el doc
-correspondiente en el mismo PR:
-
-| Cambio                                        | Doc obligatorio                          |
-|-----------------------------------------------|------------------------------------------|
-| Endpoint backend                              | `docs/api.md`                            |
-| Contrato de protocolo / breaking              | `docs/protocol.md` + ADR en `docs/adr/`  |
-| Algoritmo / KDF / payload layout              | `docs/encryption.md`                     |
-| Migracion de DB con impacto operativo         | `docs/deployment.md`                     |
-| Adapters / handlers / shape de storage        | `docs/extension-dev.md`                  |
-| Modelo de amenazas, headers, CORS, CSP        | `docs/security.md`                       |
-| Cambios visibles al usuario o operador        | `CHANGELOG.md`                           |
-
-ADRs nuevos: copiar plantilla `docs/adr/0000-template.md` (si existe) y
-usar numeracion incremental.
+- Do not reduce net coverage.
+- Tests must be deterministic. For timing use
+  `Carbon::setTestNow()` or `vi.useFakeTimers()`.
+- For OAuth/Socialite flows, mock the provider with Mockery
+  (do not call real Authentik).
 
 ---
 
-## 6. Flujo de PR
+## 5. Documentation
 
-1. Branch desde `main`: `feat/<topic>`, `fix/<topic>`, `docs/<topic>`.
-2. Commits siguen
+Any PR affecting one of these contracts must update the corresponding
+document in the same PR:
+
+| Change                                         | Required Doc                            |
+|------------------------------------------------|-----------------------------------------|
+| Backend endpoint                               | `docs/api.md`                           |
+| Protocol contract / breaking change            | `docs/protocol.md` + ADR in `docs/adr/` |
+| Algorithm / KDF / payload layout               | `docs/encryption.md`                    |
+| DB migration with operational impact           | `docs/deployment.md`                    |
+| Adapters / handlers / storage shape            | `docs/extension-dev.md`                 |
+| Threat model, headers, CORS, CSP               | `docs/security.md`                      |
+| User-visible or operator-visible changes       | `CHANGELOG.md`                          |
+
+New ADRs: copy template `docs/adr/0000-template.md` (if it exists) and
+use incremental numbering.
+
+---
+
+## 6. PR Workflow
+
+1. Branch from `main`: `feat/<topic>`, `fix/<topic>`,
+   `docs/<topic>`.
+2. Commits follow
    [Conventional Commits](https://www.conventionalcommits.org/):
-   `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`, `perf:`,
-   `security:`.
-3. Antes de push: `composer test`, `npm test`, `composer audit`,
+   `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`,
+   `perf:`, `security:`.
+3. Before pushing:
+   `composer test`, `npm test`, `composer audit`,
    `npm audit`, lint.
-4. PR description debe incluir:
-   - Que cambia y por que.
-   - Impacto en compat (datos, API, storage de extension).
-   - Docs actualizados (lista).
-   - Checklist de seguridad si aplica (CORS, CSP, auth, crypto).
-5. PRs que tocan crypto, auth, CORS, CSP, headers o storage del seed
-   requieren revision explicita y ADR.
-6. Squash merge por defecto.
+4. PR description must include:
+   - What changes and why.
+   - Compatibility impact (data, API, extension storage).
+   - Updated docs (list).
+   - Security checklist if applicable
+     (CORS, CSP, auth, crypto).
+5. PRs touching crypto, auth, CORS, CSP, headers, or seed storage
+   require explicit review and an ADR.
+6. Squash merge by default.
 
 ---
 
-## 7. Reporte de bugs y features
+## 7. Bug and Feature Reporting
 
-- Issues en GitHub con labels `bug`, `feature`, `security`.
-- Para vulnerabilidades de seguridad NO abrir issue publica. Ver
+- GitHub issues with labels `bug`, `feature`, `security`.
+- For security vulnerabilities DO NOT open a public issue. See
   [SECURITY.md](../SECURITY.md).
 
 ---
 
-## 8. Plantilla de PR (sugerida)
+## 8. Suggested PR Template
 
 ```markdown
-## Que
+## What
 
-<una linea>
+<one line>
 
-## Por que
+## Why
 
-<contexto / issue / decision>
+<context / issue / decision>
 
-## Como
+## How
 
-<resumen tecnico>
+<technical summary>
 
-## Compat
+## Compatibility
 
-- [ ] No rompe API publica
-- [ ] No cambia shape de storage de extension
-- [ ] No requiere migracion manual
+- [ ] Does not break public API
+- [ ] Does not change extension storage shape
+- [ ] Does not require manual migration
 
 ## Docs
 
-- [ ] Actualicé los docs de la tabla del CONTRIBUTING segun aplique
-- [ ] CHANGELOG actualizado si hay cambio visible
+- [ ] Updated docs from the CONTRIBUTING table as applicable
+- [ ] CHANGELOG updated if user-visible changes exist
 
 ## Tests
 
-- [ ] composer test verde
-- [ ] npm test verde
-- [ ] Agregue tests para el cambio
+- [ ] composer test passing
+- [ ] npm test passing
+- [ ] Added tests for the change
 ```

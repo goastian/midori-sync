@@ -20,7 +20,7 @@ Midori Sync is a self-hosted, end-to-end encrypted browser synchronization servi
             │ HTTPS (REST API)                │ HTTPS (Inertia)
             │                                 │
 ┌───────────┴─────────────────────────────────┴──────────────┐
-│                    Laravel 12 Backend                       │
+│                    Laravel 13 Backend                       │
 │                                                             │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐  │
 │  │ API v1      │  │ Auth         │  │ Scheduled Tasks  │  │
@@ -45,7 +45,7 @@ Midori Sync is a self-hosted, end-to-end encrypted browser synchronization servi
 
 | Layer | Technology |
 |-------|-----------|
-| Backend Framework | Laravel 12 (PHP 8.3+) |
+| Backend Framework | Laravel 13 (PHP 8.3+) |
 | Frontend Framework | Vue 3 + Composition API |
 | SPA Bridge | Inertia.js v3 |
 | Build Tool | Vite 8 |
