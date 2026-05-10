@@ -91,7 +91,7 @@ class ExtPairingController extends Controller
                 'avatar_url' => $user->avatar_url,
             ],
             'device' => [
-                'id' => $device->id,
+                'id' => $device->device_id,
                 'name' => $device->name,
                 'type' => $device->type,
             ],

@@ -10,6 +10,24 @@ use Illuminate\Support\Str;
 
 class SyncStorageService
 {
+    /**
+     * Canonical collection names used by the extension and API.
+     * If production boots without seeded rows, we can self-heal known
+     * collections on first access instead of returning a 500.
+     *
+     * @var array<string, string>
+     */
+    private const CANONICAL_COLLECTIONS = [
+        'bookmarks' => 'Browser bookmarks and folders',
+        'history' => 'Browsing history',
+        'tabs' => 'Currently open tabs',
+        'browser-settings' => 'Browser preferences and settings',
+        'midori-tab' => 'Midori Tab widgets, themes, and shortcuts',
+        'midori-privacy' => 'Midori Privacy filter lists and site toggles',
+        'devices' => 'Connected device metadata',
+        'passwords' => 'Encrypted password entries',
+    ];
+
     public function getRecords(
         int $userId,
         string $collectionName,
@@ -18,7 +36,7 @@ class SyncStorageService
         ?string $sort = 'newest',
         bool $includeDeleted = false,
     ): array {
-        $collection = Collection::findByName($collectionName);
+        $collection = $this->resolveCollection($collectionName);
         if (!$collection) {
             return [];
         }
@@ -45,7 +63,7 @@ class SyncStorageService
 
     public function getRecord(int $userId, string $collectionName, string $recordId): ?array
     {
-        $collection = Collection::findByName($collectionName);
+        $collection = $this->resolveCollection($collectionName);
         if (!$collection) {
             return null;
         }
@@ -66,7 +84,7 @@ class SyncStorageService
         ?float $ifUnmodifiedSince = null,
         ?string $ttl = null,
     ): array {
-        $collection = Collection::findByName($collectionName);
+        $collection = $this->resolveCollection($collectionName);
         if (!$collection) {
             throw new \InvalidArgumentException("Unknown collection: {$collectionName}");
         }
@@ -122,7 +140,7 @@ class SyncStorageService
 
     public function batchUpsert(int $userId, string $collectionName, array $records): array
     {
-        $collection = Collection::findByName($collectionName);
+        $collection = $this->resolveCollection($collectionName);
         if (!$collection) {
             throw new \InvalidArgumentException("Unknown collection: {$collectionName}");
         }
@@ -229,7 +247,7 @@ class SyncStorageService
 
     public function deleteRecord(int $userId, string $collectionName, string $recordId): bool
     {
-        $collection = Collection::findByName($collectionName);
+        $collection = $this->resolveCollection($collectionName);
         if (!$collection) {
             return false;
         }
@@ -252,7 +270,7 @@ class SyncStorageService
 
     public function deleteCollection(int $userId, string $collectionName): int
     {
-        $collection = Collection::findByName($collectionName);
+        $collection = $this->resolveCollection($collectionName);
         if (!$collection) {
             return 0;
         }
@@ -376,5 +394,27 @@ class SyncStorageService
             'ttl' => $record->ttl?->toIso8601String(),
             'deleted' => $record->deleted,
         ];
+    }
+
+    private function resolveCollection(string $collectionName): ?Collection
+    {
+        $collection = Collection::findByName($collectionName);
+        if ($collection) {
+            return $collection;
+        }
+
+        $description = self::CANONICAL_COLLECTIONS[$collectionName] ?? null;
+        if ($description === null) {
+            return null;
+        }
+
+        $collection = Collection::firstOrCreate(
+            ['name' => $collectionName],
+            ['description' => $description],
+        );
+
+        Collection::forgetByName($collectionName);
+
+        return $collection;
     }
 }

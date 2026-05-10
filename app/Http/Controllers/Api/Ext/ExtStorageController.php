@@ -21,11 +21,15 @@ class ExtStorageController extends Controller
      */
     public function index(Request $request, string $collection): JsonResponse
     {
-        $records = $this->storage->getRecords(
-            userId: $request->user()->id,
-            collectionName: $collection,
-            since: $request->float('newer') ?: null,
-        );
+        try {
+            $records = $this->storage->getRecords(
+                userId: $request->user()->id,
+                collectionName: $collection,
+                since: $request->float('newer') ?: null,
+            );
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 404);
+        }
 
         $bsos = array_map(fn ($r) => [
             'id' => $r['id'],
@@ -43,11 +47,15 @@ class ExtStorageController extends Controller
      */
     public function store(StoreBsoRequest $request, string $collection): JsonResponse
     {
-        $results = $this->storage->batchUpsert(
-            userId: $request->user()->id,
-            collectionName: $collection,
-            records: $request->validatedBsos(),
-        );
+        try {
+            $results = $this->storage->batchUpsert(
+                userId: $request->user()->id,
+                collectionName: $collection,
+                records: $request->validatedBsos(),
+            );
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 404);
+        }
 
         return response()->json($results);
     }
