@@ -5,8 +5,8 @@
  * Simplified flow: no manual server URL, passphrase, or device name required.
  */
 
-const DEFAULT_SERVER = 'http://localhost:8000';
-// Production: const DEFAULT_SERVER = 'https://sync.astian.org';
+const DEFAULT_SERVER = 'https://sync.astian.org';
+// Local development: const DEFAULT_SERVER = 'http://localhost:8000';
 
 const SYNC_TYPES = {
     bookmarks: { label: 'Bookmarks', interval: 15, enabled: true },
@@ -854,11 +854,32 @@ async function getDeviceName() {
     }
 }
 
+function normalizeServerUrl(value) {
+    const raw = String(value || '').trim().replace(/\/+$/, '');
+    if (!raw) return '';
+    let parsed;
+    try {
+        parsed = new URL(raw);
+    } catch {
+        throw new Error('Server URL is invalid');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error('Server URL must start with http:// or https://');
+    }
+    return parsed.toString().replace(/\/+$/, '');
+}
+
 /**
  * Start the OAuth2 login flow.
  * No configuration required — server URL is pre-defined, device name is auto-detected.
  */
-async function handleLogin() {
+async function handleLogin(data) {
+    const requestedServer = normalizeServerUrl(data?.serverUrl || authState.serverUrl);
+    if (requestedServer !== authState.serverUrl) {
+        authState.serverUrl = requestedServer;
+        await browser.storage.local.set({ serverUrl: requestedServer });
+    }
+
     const server = authState.serverUrl;
     const deviceName = await getDeviceName();
     const existingDeviceId = authState.device?.id || '';
@@ -1155,9 +1176,9 @@ async function handleGetProfile() {
  * Allow changing the server URL from settings (advanced).
  */
 async function handleUpdateServerUrl(data) {
-    const { serverUrl } = data;
+    const serverUrl = normalizeServerUrl(data?.serverUrl);
     if (!serverUrl) throw new Error('Server URL is required');
-    authState.serverUrl = serverUrl.replace(/\/+$/, '');
+    authState.serverUrl = serverUrl;
     await browser.storage.local.set({ serverUrl: authState.serverUrl });
     return { success: true };
 }
@@ -1315,7 +1336,7 @@ async function syncTabs() {
             url: t.url, title: t.title || '', icon: t.favIconUrl || '',
             active: t.active, lastAccessed: t.lastAccessed,
         }));
-    const clientId = authState.device?.id || 'unknown';
+    const clientId = String(authState.device?.id || 'unknown');
     await uploadBsos('tabs', [{
         id: clientId,
         payload: JSON.stringify({
@@ -1417,11 +1438,12 @@ async function uploadBsos(collection, bsos) {
     if (!encryptionKey) {
         throw new Error('Encryption key not initialized — refusing to upload unencrypted data');
     }
-    const dedupedBsos = Array.from(new Map(bsos.map(bso => [bso.id, bso])).values());
+    const dedupedBsos = Array.from(new Map(bsos.map(bso => [String(bso.id), bso])).values());
     for (let i = 0; i < dedupedBsos.length; i += BATCH_UPLOAD_CHUNK_SIZE) {
         const rawChunk = dedupedBsos.slice(i, i + BATCH_UPLOAD_CHUNK_SIZE);
         const chunk = await Promise.all(rawChunk.map(async bso => ({
             ...bso,
+            id: String(bso.id),
             payload: await encryptPayload(bso.payload, encryptionKey),
         })));
         const response = await fetch(`${authState.serverUrl}/api/ext/storage/${collection}`, {
@@ -1453,7 +1475,7 @@ async function handleGeneratePairingToken() {
 
 async function handleRedeemPairingToken(data) {
     const { pairingToken, serverUrl, encryptionKey: incomingKey } = data;
-    const server = serverUrl || authState.serverUrl;
+    const server = normalizeServerUrl(serverUrl || authState.serverUrl);
     const deviceName = await getDeviceName();
     const response = await fetch(`${server}/api/ext/pair/redeem`, {
         method: 'POST',

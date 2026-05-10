@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' http://localhost:8000 https://sync.astian.org https://accounts.astian.org; object-src 'none'; base-uri 'self'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' http://localhost:8000 https://sync.astian.org https://accounts.astian.org; object-src 'none'; base-uri 'self'; form-action 'self'">
     <title>Midori Sync</title>
     <link rel="stylesheet" href="popup.css">
 </head>
@@ -25,7 +25,7 @@
         <div class="form">
             <div class="field">
                 <label for="server-url">Server URL</label>
-                <input type="url" id="server-url" placeholder="http://localhost:8000" value="http://localhost:8000">
+                <input type="url" id="server-url" placeholder="https://sync.astian.org" value="https://sync.astian.org">
             </div>
             <div id="login-error" class="error hidden"></div>
             <button id="login-btn" class="btn btn-primary">Sign in with Astian Account</button>
@@ -48,7 +48,7 @@
         <form id="pair-form" class="form">
             <div class="field">
                 <label for="pair-server">Server URL</label>
-                <input type="url" id="pair-server" placeholder="http://localhost:8000" value="http://localhost:8000">
+                <input type="url" id="pair-server" placeholder="https://sync.astian.org" value="https://sync.astian.org">
             </div>
             <div class="field">
                 <label for="pair-code">Pairing Code</label>

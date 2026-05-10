@@ -49,6 +49,11 @@ const views = {
 
 document.addEventListener('DOMContentLoaded', async () => {
     const state = await sendMessage('getState');
+    const loginServerInput = document.getElementById('server-url');
+    const pairServerInput = document.getElementById('pair-server');
+    if (loginServerInput) loginServerInput.value = state.serverUrl || 'https://sync.astian.org';
+    if (pairServerInput) pairServerInput.value = state.serverUrl || 'https://sync.astian.org';
+
     if (state.isLoggedIn) {
         // Check lock state before showing main view; if locked, prompt unlock.
         const lock = await safeLockStatus();
