@@ -1,112 +1,113 @@
-# Midori Sync Protocol — Surface de API
+# Midori Sync Protocol — API Surface
 
-> ADR-001. Decision arquitectonica sobre la coexistencia de `/api/ext` y
-> `/api/v1`. Complementa `docs/api.md` (referencia canonica MSP) y
+> ADR-001. Architectural decision regarding the coexistence of `/api/ext`
+> and `/api/v1`. Complements `docs/api.md` (canonical MSP reference) and
 > `docs/architecture.md`.
 
-## Contexto
+## Context
 
-Hoy existen dos superficies HTTP en `routes/api.php`:
+There are currently two HTTP surfaces in `routes/api.php`:
 
-- `/api/v1/*` — Midori Sync Protocol (MSP) completo. Superficie canonica y
-  versionada del servidor.
-- `/api/ext/*` — Adaptador simplificado para la extension (formato flat de
-  BSOs, OAuth callback, pairing).
+- `/api/v1/*` — Full Midori Sync Protocol (MSP). Canonical and versioned
+  server surface.
+- `/api/ext/*` — Simplified adapter for the extension (flat BSO format,
+  OAuth callback, pairing).
 
-La duda era si ambos deben existir, o si uno debe absorber al otro. Este
-documento fija la decision.
+The question was whether both should coexist, or whether one should absorb
+the other. This document establishes the decision.
 
 ## Decision
 
-`/api/v1` es la superficie canonica y de largo plazo. Cualquier cliente
-nuevo (CLI, mobile, test harness) debe consumir `/api/v1`.
+`/api/v1` is the canonical and long-term surface. Any new client
+(CLI, mobile, test harness) must consume `/api/v1`.
 
-`/api/ext` queda como **adaptador oficial de la extension** sobre el mismo
-backend (`SyncStorageService`, `SyncAuthService`). No es un motor paralelo:
-es una capa fina de transporte pensada para el entorno del navegador
-(manifest MV2, sin headers `X-If-Unmodified-Since`, sin conflictos batch
-granulares, sin deep linking).
+`/api/ext` remains the **official extension adapter** on top of the same
+backend (`SyncStorageService`, `SyncAuthService`). It is not a parallel
+engine: it is a thin transport layer designed for the browser environment
+(MV2 manifest, no `X-If-Unmodified-Since` headers, no granular batch
+conflicts, no deep linking).
 
-Se mantiene porque:
+It is maintained because:
 
-- El formato flat `[{id, payload, modified}, ...]` es mas barato de generar
-  en el navegador y esta congelado por compatibilidad con el store local.
-- El flujo OAuth de extension (`/api/ext/auth/start` + `poll`) tiene
-  propiedades distintas: es un handshake que no existe en `/api/v1`.
-- Desacopla la evolucion del MSP de la extension instalada en usuarios.
+- The flat format `[{id, payload, modified}, ...]` is cheaper to generate
+  in the browser and is frozen for compatibility with the local store.
+- The extension OAuth flow (`/api/ext/auth/start` + `poll`) has distinct
+  properties: it is a handshake flow that does not exist in `/api/v1`.
+- It decouples MSP evolution from extensions already installed by users.
 
-## Reglas de oro
+## Golden Rules
 
-1. **Un solo backend.** Ambas superficies deben delegar en
-   `App\Services\SyncStorageService` y `App\Services\SyncAuthService`. No
-   se permite duplicar logica de negocio en controllers de `Api\Ext`.
-2. **`/api/v1` primero.** Toda nueva capacidad (colecciones, delta sync,
-   quotas, etags) se especifica y valida primero en `/api/v1`.
-3. **`/api/ext` solo adapta.** Si `/api/ext` necesita un endpoint nuevo,
-   debe ser una proyeccion de uno existente en `/api/v1`, no una feature
-   exclusiva.
-4. **Sin breaking changes en `/api/ext`.** Mientras haya extensiones
-   distribuidas, el contrato flat de BSOs es estable. Cambios incompatibles
-   requieren un `/api/ext/v2`.
-5. **Mismo middleware.** Ambas superficies usan `ValidateSyncToken`,
-   `TrackDevice`, `EnforceQuota` y `CorsForExtension` cuando aplican.
+1. **Single backend.** Both surfaces must delegate to
+   `App\Services\SyncStorageService` and `App\Services\SyncAuthService`.
+   Business logic duplication in `Api\Ext` controllers is not allowed.
+2. **`/api/v1` first.** Any new capability (collections, delta sync,
+   quotas, etags) must first be specified and validated in `/api/v1`.
+3. **`/api/ext` only adapts.** If `/api/ext` requires a new endpoint,
+   it must be a projection of an existing `/api/v1` endpoint, not an
+   exclusive feature.
+4. **No breaking changes in `/api/ext`.** As long as distributed extensions
+   exist, the flat BSO contract remains stable. Incompatible changes require
+   an `/api/ext/v2`.
+5. **Shared middleware.** Both surfaces use `ValidateSyncToken`,
+   `TrackDevice`, `EnforceQuota`, and `CorsForExtension` where applicable.
 
-## Tabla de correspondencias
+## Mapping Table
 
-| Operacion              | `/api/v1`                         | `/api/ext`                         |
+| Operation              | `/api/v1`                         | `/api/ext`                         |
 |------------------------|-----------------------------------|------------------------------------|
-| Intercambio OAuth      | `POST /auth/token`                | `GET /auth/start` + `/auth/poll`   |
-| Revocar token          | `DELETE /auth/token`              | `POST /logout`                     |
-| Listar records         | `GET /collections/{name}`         | `GET /storage/{collection}?newer=` |
-| Upsert unitario        | `PUT /collections/{name}/{id}`    | (no existe — se batchea)           |
+| OAuth exchange         | `POST /auth/token`                | `GET /auth/start` + `/auth/poll`   |
+| Revoke token           | `DELETE /auth/token`              | `POST /logout`                     |
+| List records           | `GET /collections/{name}`         | `GET /storage/{collection}?newer=` |
+| Single upsert          | `PUT /collections/{name}/{id}`    | (does not exist — batched instead) |
 | Batch upsert           | `POST /collections/{name}`        | `POST /storage/{collection}`       |
-| Borrar record          | `DELETE /collections/{name}/{id}` | (proximo: flag `deleted: true`)    |
-| Informacion de sync    | `GET /sync/info`                  | `GET /storage/info`                |
-| Estado por coleccion   | `GET /sync/status`                | `GET/POST /sync/status`            |
-| Pairing (generar)      | —                                 | `POST /pair`                       |
-| Pairing (redimir)      | —                                 | `POST /pair/redeem`                |
-| Crypto key bundle      | `GET/POST /crypto/keys`           | (misma ruta, montada en `ext`)     |
+| Delete record          | `DELETE /collections/{name}/{id}` | (next: `deleted: true` flag)       |
+| Sync information       | `GET /sync/info`                  | `GET /storage/info`                |
+| Collection status      | `GET /sync/status`                | `GET/POST /sync/status`            |
+| Pairing (generate)     | —                                 | `POST /pair`                       |
+| Pairing (redeem)       | —                                 | `POST /pair/redeem`                |
+| Crypto key bundle      | `GET/POST /crypto/keys`           | (same route, mounted under `ext`)  |
 
-## Headers condicionales
+## Conditional Headers
 
-`/api/v1` implementa `ETag` + `If-None-Match` en endpoints de lectura
-cacheables (`GET /sync/info`, `GET /sync/status`,
-`GET /collections/{name}`). Tambien acepta `If-Modified-Since` cuando la
-respuesta tenga un `last_modified` definido.
+`/api/v1` implements `ETag` + `If-None-Match` on cacheable read endpoints
+(`GET /sync/info`, `GET /sync/status`,
+`GET /collections/{name}`). It also accepts `If-Modified-Since` when the
+response includes a defined `last_modified`.
 
-`/api/ext` **no** implementa etags por ahora: la extension usa delta sync
-por `newer=` en su lugar. Si se necesita, se agrega en un MSP v2.
+`/api/ext` currently **does not** implement etags: the extension uses
+delta sync through `newer=` instead. If needed, it can be introduced in
+an MSP v2.
 
-## Compresion
+## Compression
 
-La compresion gzip esta disponible como middleware opcional
-(`NegotiateCompression`) controlado por `SYNC_HTTP_COMPRESSION=true`. Por
-default viene apagada porque en despliegues estandar nginx ya gzipa las
-respuestas del upstream PHP-FPM. Activarla en PHP solo tiene sentido en
-despliegues sin nginx / sin reverse proxy.
+Gzip compression is available as an optional middleware
+(`NegotiateCompression`) controlled by `SYNC_HTTP_COMPRESSION=true`. By
+default it is disabled because standard nginx deployments already gzip
+responses from the PHP-FPM upstream. Enabling it in PHP only makes sense
+in deployments without nginx or without a reverse proxy.
 
-## Rate limiting
+## Rate Limiting
 
-El limiter `sync` aplica a `/api/*` y diferencia lectura (mas generoso) de
-escritura (mas estricto), con claves separadas para que una rafaga de
-lecturas no consuma la cuota de escritura:
+The `sync` limiter applies to `/api/*` and differentiates between reads
+(more permissive) and writes (more restrictive), with separate keys so
+that a burst of reads does not consume the write quota:
 
 - `SYNC_RATE_LIMIT_READ` (default 120/min) — `GET`, `HEAD`, `OPTIONS`.
 - `SYNC_RATE_LIMIT_WRITE` (default 60/min) — `POST`, `PUT`, `PATCH`,
   `DELETE`.
 
-La variable legacy `SYNC_RATE_LIMIT` sigue respetada como fallback de
-ambas.
+The legacy variable `SYNC_RATE_LIMIT` is still respected as a fallback for
+both.
 
-## Criterios para deprecar `/api/ext`
+## Criteria for Deprecating `/api/ext`
 
-`/api/ext` se podra eliminar cuando:
+`/api/ext` may be removed when:
 
-1. La extension soporte Manifest V3 y un cliente MSP `/api/v1` equivalente.
-2. El flujo OAuth de extension se rehaga sobre `/api/v1` (con un endpoint
-   de handshake documentado).
-3. No queden instalaciones con el contrato BSO flat en el ecosistema
-   soportado.
+1. The extension supports Manifest V3 and an equivalent `/api/v1` MSP
+   client.
+2. The extension OAuth flow is rebuilt on top of `/api/v1` (with a
+   documented handshake endpoint).
+3. No supported ecosystem installations remain using the flat BSO contract.
 
-Hasta entonces, `/api/ext` es una API de primera clase, solo que su
-contrato publico es mas acotado que el de `/api/v1`.
+Until then, `/api/ext` remains a first-class API, although its public
+contract is narrower than `/api/v1`.
