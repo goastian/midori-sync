@@ -43,6 +43,13 @@ function goToPage(url) {
     router.get(url, {}, { preserveScroll: true, preserveState: true, replace: true });
 }
 
+function decodeLabel(label) {
+    if (label == null) return '';
+    const txt = document.createElement('textarea');
+    txt.innerHTML = String(label);
+    return txt.value.replace(/<[^>]*>/g, '');
+}
+
 function resetFilters() {
     status.value = 'all';
     search.value = '';
@@ -240,7 +247,6 @@ function revokeAll() {
                         type="button"
                         :disabled="!link.url || link.active"
                         @click="goToPage(link.url)"
-                        v-html="link.label"
                         :class="[
                             'min-w-[2rem] text-center text-xs px-2.5 py-1 border rounded-md transition-colors',
                             link.active
@@ -249,7 +255,7 @@ function revokeAll() {
                                     ? 'bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800'
                                     : 'bg-gray-50 dark:bg-gray-900/50 text-gray-300 dark:text-gray-600 border-gray-100 dark:border-gray-800 cursor-not-allowed'
                         ]"
-                    />
+                    >{{ decodeLabel(link.label) }}</button>
                 </div>
             </nav>
         </div>
