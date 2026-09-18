@@ -9,9 +9,9 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * payments.astian.org es la fuente de verdad.
- * Library solo cachea entitlements (Redis TTL + tabla billing_cache).
- * Fallback: lecturas abiertas, escrituras con último plan conocido → free.
+ * payments.astian.org is the source of truth.
+ * Library only caches entitlements (Redis TTL + billing_cache table).
+ * Fallback: open reads, writes with the last known plan → free.
  */
 class EntitlementService
 {

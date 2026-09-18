@@ -39,16 +39,16 @@ function toggle(link, flag) {
   router.patch(`/library/${link.id}`, { [flag]: !link[flag] }, { preserveScroll: true });
 }
 function remove(link) {
-  if (!confirm(`Archivar "${link.title || link.url}"?`)) return;
+  if (!confirm(`Archive "${link.title || link.url}"?`)) return;
   router.patch(`/library/${link.id}`, { is_archived: true }, { preserveScroll: true });
 }
 function collectionName(id) {
   return props.collections?.find(c => c.id === id)?.name ?? '—';
 }
 function statusBadge(l) {
-  if (l.metadata_status === 'pending') return 'Analizando…';
-  if (l.metadata_status === 'failed') return 'Sin metadata';
-  if (l.snapshot_status === 'ready') return 'Preservado';
+  if (l.metadata_status === 'pending') return 'Analyzing…';
+  if (l.metadata_status === 'failed') return 'No metadata';
+  if (l.snapshot_status === 'ready') return 'Preserved';
   return `${l.reading_time_min ?? '·'} min`;
 }
 </script>
@@ -67,30 +67,30 @@ function statusBadge(l) {
     <div v-if="showSave" class="mb-4 border rounded-lg p-3 bg-white dark:bg-gray-900">
       <div class="flex flex-col sm:flex-row gap-2">
         <input v-model="url" placeholder="https://…" class="flex-1 border rounded-md px-3 py-1.5 text-sm dark:bg-gray-800 dark:border-gray-700" />
-        <input v-model="saveTags" placeholder="tags, coma, separado" class="sm:w-56 border rounded-md px-3 py-1.5 text-sm dark:bg-gray-800 dark:border-gray-700" />
-        <button @click="save" class="text-xs px-4 py-1.5 rounded-md bg-primary-600 text-white">Guardar</button>
+        <input v-model="saveTags" placeholder="comma, separated, tags" class="sm:w-56 border rounded-md px-3 py-1.5 text-sm dark:bg-gray-800 dark:border-gray-700" />
+        <button @click="save" class="text-xs px-4 py-1.5 rounded-md bg-primary-600 text-white">Save</button>
       </div>
       <p v-if="page.props.errors?.url" class="text-xs text-red-500 mt-1">{{ page.props.errors.url }}</p>
     </div>
 
     <div class="mb-4 flex gap-2">
-      <input v-model="q" @keyup.enter="search" placeholder="Buscar por título, descripción, host o URL…" class="flex-1 border rounded-md px-3 py-1.5 text-sm dark:bg-gray-800 dark:border-gray-700" />
-      <button @click="search" class="text-xs px-3 py-1.5 rounded-md border dark:border-gray-700">Buscar</button>
+      <input v-model="q" @keyup.enter="search" placeholder="Search by title, description, host or URL…" class="flex-1 border rounded-md px-3 py-1.5 text-sm dark:bg-gray-800 dark:border-gray-700" />
+      <button @click="search" class="text-xs px-3 py-1.5 rounded-md border dark:border-gray-700">Search</button>
     </div>
 
     <div class="flex flex-wrap gap-1.5 mb-4">
       <button v-for="s in ['all', 'favorites', 'pinned', 'archived']" :key="s" @click="filterState(s)"
         :class="['text-xs px-2.5 py-1 rounded-full border', stateFilter === s ? 'bg-primary-600 text-white border-primary-600' : 'dark:border-gray-700 text-gray-500']">
-        {{ { all: 'Todos', favorites: '★ Favoritos', pinned: '📌 Fijados', archived: 'Archivo' }[s] }}
+        {{ { all: 'All', favorites: '★ Favorites', pinned: '📌 Pinned', archived: 'Archive' }[s] }}
       </button>
       <select :value="filters?.collection_id ?? ''" @change="filterByCollection($event.target.value || null)"
         class="text-xs px-2 py-1 rounded-full border dark:bg-gray-800 dark:border-gray-700">
-        <option value="">Todas las colecciones</option>
+        <option value="">All collections</option>
         <option v-for="c in collections ?? []" :key="c.id" :value="c.id">{{ c.name }}</option>
       </select>
       <select :value="filters?.tag ?? ''" @change="filterByTag($event.target.value || null)"
         class="text-xs px-2 py-1 rounded-full border dark:bg-gray-800 dark:border-gray-700">
-        <option value="">Todos los tags</option>
+        <option value="">All tags</option>
         <option v-for="t in tags ?? []" :key="t.id" :value="t.name">#{{ t.name }}</option>
       </select>
     </div>
@@ -112,20 +112,20 @@ function statusBadge(l) {
           </div>
         </div>
         <div class="flex flex-col gap-1 shrink-0">
-          <button @click="toggle(l, 'is_favorite')" :title="l.is_favorite ? 'Quitar favorito' : 'Favorito'"
+          <button @click="toggle(l, 'is_favorite')" :title="l.is_favorite ? 'Remove favorite' : 'Favorite'"
             :class="['text-sm', l.is_favorite ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-400']">★</button>
-          <button @click="toggle(l, 'is_pinned')" :title="l.is_pinned ? 'Desfijar' : 'Fijar'"
+          <button @click="toggle(l, 'is_pinned')" :title="l.is_pinned ? 'Unpin' : 'Pin'"
             :class="['text-sm', l.is_pinned ? 'text-primary-500' : 'text-gray-300 hover:text-primary-400']">📌</button>
-          <button @click="remove(l)" title="Archivar" class="text-sm text-gray-300 hover:text-red-400">🗄</button>
+          <button @click="remove(l)" title="Archive" class="text-sm text-gray-300 hover:text-red-400">🗄</button>
         </div>
       </div>
-      <p v-if="!(links?.data ?? []).length" class="text-sm text-gray-400 text-center py-8">Sin links con estos filtros. Guarda el primero con “+ Save link”.</p>
+      <p v-if="!(links?.data ?? []).length" class="text-sm text-gray-400 text-center py-8">No links match these filters. Save the first one with “+ Save link”.</p>
     </div>
 
     <div v-if="(links?.last_page ?? 1) > 1" class="flex gap-2 mt-4 text-xs">
-      <Link v-if="links.prev_page_url" :href="links.prev_page_url" class="px-3 py-1 border rounded">← Anterior</Link>
-      <span class="px-2 py-1 text-gray-500">Página {{ links.current_page }} / {{ links.last_page }}</span>
-      <Link v-if="links.next_page_url" :href="links.next_page_url" class="px-3 py-1 border rounded">Siguiente →</Link>
+      <Link v-if="links.prev_page_url" :href="links.prev_page_url" class="px-3 py-1 border rounded">← Previous</Link>
+      <span class="px-2 py-1 text-gray-500">Page {{ links.current_page }} / {{ links.last_page }}</span>
+      <Link v-if="links.next_page_url" :href="links.next_page_url" class="px-3 py-1 border rounded">Next →</Link>
     </div>
   </AppLayout>
 </template>

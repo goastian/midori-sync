@@ -1,7 +1,7 @@
 /**
- * Midori Library client — guardado rápido estilo Pocket/Linkwarden.
- * Aislado del motor sync: usa el mismo sync token pero habla a /api/library.
- * Mapea 402 plan_limit → banner de upgrade a payments.astian.org.
+ * Midori Library client — Pocket/Linkwarden-style quick save.
+ * Isolated from the sync engine: uses the same sync token but talks to /api/library.
+ * Maps 402 plan_limit → upgrade banner pointing at payments.astian.org.
  */
 class LibraryClient {
     constructor(baseUrl, getToken) {

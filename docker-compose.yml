@@ -70,7 +70,7 @@ services:
     deploy:
       replicas: 2
 
-  # Worker B — snapshots (pesado; el screenshot/PDF con Chromium vive aquí en L3-full)
+  # Worker B — snapshots (heavy; screenshot/PDF via Chromium lives here in L3-full)
   worker-snapshot:
     build:
       context: .

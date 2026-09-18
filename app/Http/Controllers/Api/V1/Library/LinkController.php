@@ -20,7 +20,7 @@ class LinkController extends Controller
         $q = LibraryLink::where('user_id', $user->id)->with('tags')->orderByDesc('created_at');
 
         if ($s = $request->input('q')) {
-            // Búsqueda simple fase 1 (título/descripción/url/host). tsvector completo en L4.
+            // Phase-1 simple search (title/description/url/host). Full tsvector in L4.
             $like = '%'.mb_substr($s, 0, 120).'%';
             $q->where(fn ($w) => $w->where('title', 'like', $like)
                 ->orWhere('description', 'like', $like)
@@ -246,7 +246,7 @@ class LinkController extends Controller
 
             return response($csv, 200, ['Content-Type' => 'text/csv', 'Content-Disposition' => 'attachment; filename="midori-library.csv"']);
         }
-        // Netscape HTML (formato bookmarks estándar Pocket/Linkwarden).
+        // Netscape HTML (standard Pocket/Linkwarden bookmark format).
         $html = "<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n<TITLE>Bookmarks</TITLE>\n<H1>Bookmarks</H1>\n<DL><p>\n";
         foreach ($links as $l) {
             $html .= '<DT><A HREF="'.e($l->url).'" ADD_DATE="'.$l->created_at->timestamp.'">'.e((string) $l->title)."</A>\n";

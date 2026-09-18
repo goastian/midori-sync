@@ -71,7 +71,7 @@ class LibraryController extends Controller
         ]);
     }
 
-    /** Guardado desde el dashboard (sesión web, respuesta Inertia/redirect). */
+    /** Saved from the dashboard (web session, Inertia/redirect response). */
     public function store(Request $request)
     {
         $data = $request->validate(['url' => 'required|string|max:2000', 'title' => 'nullable|string|max:2000', 'tags' => 'nullable|string|max:500']);
@@ -91,7 +91,7 @@ class LibraryController extends Controller
         $max = $ent['limits']['max_links'] ?? null;
         if (! EntitlementService::unlimited($max) && LibraryLink::where('user_id', $user->id)->count() >= (int) $max) {
             return redirect()->back()->withErrors([
-                'url' => 'Link limit reached for your plan. Upgrade en '.config('library.upgrade_url'),
+                'url' => 'Link limit reached for your plan. Upgrade at '.config('library.upgrade_url'),
             ]);
         }
 
@@ -113,7 +113,7 @@ class LibraryController extends Controller
         return redirect()->back();
     }
 
-    /** Edición completa: título, colección, tags, flags. */
+    /** Full edit: title, collection, tags, flags. */
     public function update(Request $request, string $id)
     {
         $link = LibraryLink::where('user_id', $request->user()->id)->findOrFail($id);
@@ -165,7 +165,7 @@ class LibraryController extends Controller
         $ent = app(EntitlementService::class)->getEntitlement($request->user());
         $allowed = (array) ($ent['limits']['snapshot_kinds'] ?? ['html']);
         if (! in_array('html', $allowed, true)) {
-            return redirect()->back()->withErrors(['preserve' => 'Snapshots not included in your plan. Upgrade en '.config('library.upgrade_url')]);
+            return redirect()->back()->withErrors(['preserve' => 'Snapshots not included in your plan. Upgrade at '.config('library.upgrade_url')]);
         }
         $link->update(['snapshot_status' => 'pending']);
         SnapshotPage::dispatch($link->id, ['html']);

@@ -12,10 +12,10 @@ use App\Http\Middleware\TrackDevice;
 use App\Http\Middleware\ValidateSyncToken;
 use Illuminate\Support\Facades\Route;
 
-// Share público (sin auth).
+// Public share (no auth).
 Route::get('/library/s/{token}', [ShareController::class, 'public']);
 
-// Webhook payments.astian.org (HMAC, sin auth de usuario, con throttle propio).
+// payments.astian.org webhook (HMAC-signed, no user auth, own throttle).
 Route::post('/library/billing/webhook', [BillingController::class, 'webhook'])
     ->middleware('throttle:sync-unauth');
 

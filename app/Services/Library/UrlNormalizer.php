@@ -43,7 +43,7 @@ class UrlNormalizer
             return false;
         }
         $host = $parts['host'];
-        // Bloqueo SSRF básico: IPs literales privadas + metadata cloud.
+        // Basic SSRF guard: private literal IPs + cloud metadata.
         if (filter_var($host, FILTER_VALIDATE_IP)) {
             return ! self::isPrivateIp($host);
         }

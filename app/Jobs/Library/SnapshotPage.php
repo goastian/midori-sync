@@ -41,7 +41,7 @@ class SnapshotPage implements ShouldQueue
         $ok = false;
         foreach ($this->kinds as $kind) {
             if ($kind !== 'html') {
-                continue; // screenshot/pdf requieren Chromium dedicado (fase L3-full).
+                continue; // screenshot/pdf require a dedicated Chromium (L3-full phase).
             }
             try {
                 $res = Http::withHeaders(['User-Agent' => 'MidoriLibrarySnapshot/1.0'])

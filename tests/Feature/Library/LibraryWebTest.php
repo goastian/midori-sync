@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\Library\MetadataExtractor;
 use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class LibraryWebTest extends TestCase
@@ -17,8 +18,8 @@ class LibraryWebTest extends TestCase
     {
         $user = User::factory()->create();
         $this->actingAs($user);
-        \Illuminate\Support\Facades\Http::fake([
-            '*' => \Illuminate\Support\Facades\Http::response(
+        Http::fake([
+            '*' => Http::response(
                 '<html><head><title>Fake Title</title><meta name="description" content="Fake desc"></head>'
                 .'<body><article><h1>Hola</h1><p>'.str_repeat('palabra ', 80).'</p></article></body></html>', 200, ['Content-Type' => 'text/html']),
         ]);
@@ -45,7 +46,7 @@ class LibraryWebTest extends TestCase
         $this->assertEquals(1, $link->shares()->count());
 
         $this->post("/library/{$link->id}/refresh", [])->assertRedirect();
-        // Con QUEUE_CONNECTION=sync el job corre inline contra el HTTP fakeado.
+        // With QUEUE_CONNECTION=sync the job runs inline against the faked HTTP.
         $this->assertEquals('ready', $link->fresh()->metadata_status);
         $this->assertEquals('Fake Title', $link->fresh()->title);
 

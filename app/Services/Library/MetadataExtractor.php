@@ -3,8 +3,8 @@
 namespace App\Services\Library;
 
 /**
- * Extrae metadata OpenGraph + HTML legible sanitizado para el reader.
- * Sin dependencias externas: regex + DOMDocument de PHP.
+ * Extracts OpenGraph metadata + sanitized readable HTML for the reader.
+ * No external dependencies: plain regex + PHP DOMDocument.
  */
 class MetadataExtractor
 {
@@ -47,7 +47,7 @@ class MetadataExtractor
         }
         if (preg_match($patterns[$key], $html, $m)) {
             $v = trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5));
-            // content="..." con comillas simples dentro rompe el regex; recorta en la próxima comilla doble huérfana.
+            // content="..." with single quotes inside breaks the regex; trim at the next orphan double quote.
             if ($key !== 'title') {
                 $v = trim(explode("\n", $v)[0]);
             }
@@ -117,12 +117,12 @@ class MetadataExtractor
 
         $allowed = array_flip(self::ALLOWED_TAGS);
         $xpath = new \DOMXPath($doc);
-        // Itera en reversa para poder reemplazar/eliminar nodos con seguridad.
+        // Walk in reverse so nodes can be safely replaced/removed.
         $nodes = iterator_to_array($xpath->query('//*'));
         foreach (array_reverse($nodes) as $node) {
             /** @var \DOMElement $node */
             if ($node->nodeName === 'div' || $node->nodeName === 'span' || $node->nodeName === 'section') {
-                // Desenvuelve contenedores: conserva los hijos, elimina la etiqueta.
+                // Unwrap containers: keep children, drop the tag.
                 $frag = $doc->createDocumentFragment();
                 while ($node->firstChild) {
                     $frag->appendChild($node->firstChild);
@@ -136,7 +136,7 @@ class MetadataExtractor
 
                 continue;
             }
-            // Atributos: solo href/src/alt/title, y sin javascript:.
+            // Attributes: href/src/alt/title only, and no javascript:.
             foreach (iterator_to_array($node->attributes ?? []) as $attr) {
                 $an = strtolower($attr->nodeName);
                 $tag = strtolower($node->nodeName);

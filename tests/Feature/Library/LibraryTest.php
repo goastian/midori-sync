@@ -109,7 +109,7 @@ class LibraryTest extends TestCase
 
         $this->assertDatabaseHas('billing_cache', ['user_id' => $this->user->id, 'plan' => 'pro']);
 
-        // Replay mismo event_id → deduped, sin duplicar.
+        // Replay of the same event_id → deduped, no duplicates.
         $this->call('POST', '/api/library/billing/webhook', [], [], [], [
             'CONTENT_TYPE' => 'application/json',
             'HTTP_X_PAYMENTS_SIGNATURE' => $sig,
@@ -121,7 +121,7 @@ class LibraryTest extends TestCase
 
     public function test_guardrail_no_stripe_in_sync(): void
     {
-        // payments solo vive en library/payments. Prohíbe tablas o env Stripe locales.
+        // Payments only lives in library/payments. Forbids local Stripe tables or env.
         $this->assertFalse(Schema::hasTable('subscriptions'));
         $this->assertStringNotContainsString('STRIPE', file_get_contents(base_path('.env.example')) ?? '');
     }

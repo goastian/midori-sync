@@ -2,8 +2,8 @@
 
 return [
     /*
-    | predominates: library es el único dominio con paywall.
-    | sync nunca consulta estos valores.
+    | Library is the only domain with a paywall.
+    | Sync never reads these values.
     */
     'billing_enabled' => env('LIBRARY_BILLING_ENABLED', true),
 
@@ -13,9 +13,9 @@ return [
     'upgrade_url' => env('PAYMENTS_UPGRADE_URL', env('PAYMENTS_BASE_URL', 'https://payments.astian.org').'/checkout?plan=pro'),
     'entitlement_ttl' => (int) env('LIBRARY_ENTITLEMENT_TTL', 300),
 
-    // Defaults cuando billing está desactivado (self-host) o payments cae sin cache.
+    // Defaults when billing is disabled (self-host) or payments is down with no cache.
     'selfhost_limits' => [
-        'max_links' => -1, // -1 = ilimitado
+        'max_links' => -1, // -1 = unlimited
         'max_snapshots' => -1,
         'snapshot_kinds' => ['html', 'screenshot', 'pdf'],
         'ai_tags' => true,
