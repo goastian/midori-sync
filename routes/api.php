@@ -13,7 +13,11 @@ use App\Http\Middleware\CorsForExtension;
 use App\Http\Middleware\EnforceQuota;
 use App\Http\Middleware\TrackDevice;
 use App\Http\Middleware\ValidateSyncToken;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+
+// ─── Library API (servicio monetizable, billing en payments.astian.org) ──
+require __DIR__.'/library.php';
 
 // ─── Extension API ──────────────────────────────────────────────────────
 // Dedicated endpoints for the browser extension with simplified data formats.
@@ -43,8 +47,9 @@ Route::prefix('ext')->middleware(CorsForExtension::class)->group(function () {
         Route::post('/logout', [AuthTokenController::class, 'destroy']);
 
         // Profile
-        Route::get('/profile', function (\Illuminate\Http\Request $request) {
+        Route::get('/profile', function (Request $request) {
             $user = $request->user();
+
             return response()->json([
                 'id' => $user->id,
                 'email' => $user->email,

@@ -10,9 +10,11 @@ const { isDark, toggle: toggleTheme } = useTheme();
 
 const navigation = [
     { name: 'Dashboard', href: '/dashboard' },
+    { name: 'Library', href: '/library' },
     { name: 'Devices', href: '/devices' },
     { name: 'Collections', href: '/collections' },
     { name: 'Audit', href: '/audit' },
+    { name: 'Billing', href: '/library/billing' },
     { name: 'Settings', href: '/settings' },
 ];
 

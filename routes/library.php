@@ -1,0 +1,51 @@
+<?php
+
+use App\Http\Controllers\Api\V1\Library\BillingController;
+use App\Http\Controllers\Api\V1\Library\HighlightController;
+use App\Http\Controllers\Api\V1\Library\LibraryCollectionController;
+use App\Http\Controllers\Api\V1\Library\LinkController;
+use App\Http\Controllers\Api\V1\Library\ShareController;
+use App\Http\Controllers\Api\V1\Library\TagController;
+use App\Http\Middleware\CheckLibraryEntitlement;
+use App\Http\Middleware\CorsForExtension;
+use App\Http\Middleware\TrackDevice;
+use App\Http\Middleware\ValidateSyncToken;
+use Illuminate\Support\Facades\Route;
+
+// Share público (sin auth).
+Route::get('/library/s/{token}', [ShareController::class, 'public']);
+
+// Webhook payments.astian.org (HMAC, sin auth de usuario, con throttle propio).
+Route::post('/library/billing/webhook', [BillingController::class, 'webhook'])
+    ->middleware('throttle:sync-unauth');
+
+Route::prefix('library')->middleware([CorsForExtension::class, ValidateSyncToken::class, TrackDevice::class])->group(function () {
+    Route::get('/entitlement', [BillingController::class, 'entitlement']);
+    Route::get('/upgrade', [BillingController::class, 'upgrade']);
+
+    Route::get('/links/export', [LinkController::class, 'export']);
+    Route::get('/links', [LinkController::class, 'index']);
+    Route::post('/links', [LinkController::class, 'store'])->middleware(CheckLibraryEntitlement::class.':links');
+    Route::post('/links/import', [LinkController::class, 'import'])->middleware(CheckLibraryEntitlement::class.':links');
+    Route::post('/links/bulk', [LinkController::class, 'bulk']);
+    Route::get('/links/{id}', [LinkController::class, 'show']);
+    Route::patch('/links/{id}', [LinkController::class, 'update']);
+    Route::delete('/links/{id}', [LinkController::class, 'destroy']);
+    Route::post('/links/{id}/preserve', [LinkController::class, 'preserve'])->middleware(CheckLibraryEntitlement::class.':snapshots');
+
+    Route::get('/tags', [TagController::class, 'index']);
+    Route::post('/tags', [TagController::class, 'store']);
+    Route::delete('/tags/{id}', [TagController::class, 'destroy']);
+
+    Route::get('/collections', [LibraryCollectionController::class, 'index']);
+    Route::post('/collections', [LibraryCollectionController::class, 'store']);
+    Route::patch('/collections/{id}', [LibraryCollectionController::class, 'update']);
+    Route::delete('/collections/{id}', [LibraryCollectionController::class, 'destroy']);
+
+    Route::get('/links/{linkId}/highlights', [HighlightController::class, 'index']);
+    Route::post('/links/{linkId}/highlights', [HighlightController::class, 'store']);
+    Route::delete('/links/{linkId}/highlights/{id}', [HighlightController::class, 'destroy']);
+
+    Route::post('/links/{linkId}/shares', [ShareController::class, 'store']);
+    Route::delete('/links/{linkId}/shares/{id}', [ShareController::class, 'destroy']);
+});

@@ -24,11 +24,77 @@ services:
       - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}
       - AUTHENTIK_BASE_URL=${AUTHENTIK_BASE_URL}
       - SYNC_TOKEN_TTL=${SYNC_TOKEN_TTL:-3600}
+      - LIBRARY_BILLING_ENABLED=${LIBRARY_BILLING_ENABLED:-true}
+      - PAYMENTS_BASE_URL=${PAYMENTS_BASE_URL:-https://payments.astian.org}
+      - PAYMENTS_API_TOKEN=${PAYMENTS_API_TOKEN}
+      - PAYMENTS_WEBHOOK_SECRET=${PAYMENTS_WEBHOOK_SECRET}
+      - PAYMENTS_UPGRADE_URL=${PAYMENTS_UPGRADE_URL}
+      - LIBRARY_FETCH_ENABLED=${LIBRARY_FETCH_ENABLED:-true}
+      - LIBRARY_SNAPSHOTS_ENABLED=${LIBRARY_SNAPSHOTS_ENABLED:-true}
     volumes:
       - storage_data:/var/www/html/storage
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Worker A — metadata (ligero, escalable). Cola: fetch
+  worker-fetch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: php artisan queue:work redis --queue=fetch,default --sleep=1 --tries=3 --backoff=60
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - APP_KEY=${APP_KEY}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_DATABASE=${DB_DATABASE:-midori_sync}
+      - DB_USERNAME=${DB_USERNAME:-midori}
+      - DB_PASSWORD=${DB_PASSWORD:-secret}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_STORE=redis
+      - QUEUE_CONNECTION=redis
+    volumes:
+      - storage_data:/var/www/html/storage
+    depends_on:
+      app:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+
+  # Worker B — snapshots (pesado; el screenshot/PDF con Chromium vive aquí en L3-full)
+  worker-snapshot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: php artisan queue:work redis --queue=snapshots --sleep=2 --tries=2 --backoff=120
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - APP_KEY=${APP_KEY}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_DATABASE=${DB_DATABASE:-midori_sync}
+      - DB_USERNAME=${DB_USERNAME:-midori}
+      - DB_PASSWORD=${DB_PASSWORD:-secret}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_STORE=redis
+      - QUEUE_CONNECTION=redis
+      - LIBRARY_SNAPSHOTS_ENABLED=${LIBRARY_SNAPSHOTS_ENABLED:-true}
+    volumes:
+      - storage_data:/var/www/html/storage
+    depends_on:
+      app:
+        condition: service_started
       redis:
         condition: service_healthy
     restart: unless-stopped
