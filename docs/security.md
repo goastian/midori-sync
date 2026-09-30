@@ -146,8 +146,10 @@ default-src 'self';
   - `sync:r:*` (read, `SYNC_RATE_LIMIT_READ`).
   - `sync:w:*` (write, `SYNC_RATE_LIMIT_WRITE`).
 - Coverage: `RateLimitTest`.
-- Per-user quota via `EnforceQuota`. Tombstones excluded from
-  accounting. GET requests exempt. Coverage: `EnforceQuotaTest`.
+- Per-user quota via `SyncQuota` inside the storage transaction, serialized
+  with other writes by an account lock. Count net replacement bytes;
+  tombstones and expired records are excluded. Shrinking and deletion remain
+  available above quota. Coverage: `EnforceQuotaTest`, `SyncOperationsTest`.
 
 ---
 
