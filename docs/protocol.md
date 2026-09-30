@@ -21,13 +21,13 @@ the other. This document establishes the decision.
 `/api/v1` is the canonical and long-term surface. Any new client
 (CLI, mobile, test harness) must consume `/api/v1`.
 
-`/api/ext` remains the **official extension adapter** on top of the same
+`/api/ext` remains a **temporary compatibility adapter** on top of the same
 backend (`SyncStorageService`, `SyncAuthService`). It is not a parallel
 engine: it is a thin transport layer designed for the browser environment
 (MV2 manifest, no `X-If-Unmodified-Since` headers, no granular batch
 conflicts, no deep linking).
 
-It is maintained because:
+It is maintained during migration because:
 
 - The flat format `[{id, payload, modified}, ...]` is cheaper to generate
   in the browser and is frozen for compatibility with the local store.
@@ -45,11 +45,19 @@ It is maintained because:
 3. **`/api/ext` only adapts.** If `/api/ext` requires a new endpoint,
    it must be a projection of an existing `/api/v1` endpoint, not an
    exclusive feature.
-4. **No breaking changes in `/api/ext`.** As long as distributed extensions
-   exist, the flat BSO contract remains stable. Incompatible changes require
-   an `/api/ext/v2`.
+4. **Explicit account cutover.** The flat BSO contract remains stable while an
+   account is in legacy mode. Native activation rejects incompatible writes
+   with `426 client_upgrade_required` and prevents issuing new legacy sessions.
+   It must preserve or explicitly migrate existing data before that cutover;
+   current activation rejects populated legacy accounts. No new extension
+   runtime or `/api/ext/v2` is introduced for the native client.
 5. **Shared middleware.** Both surfaces use `ValidateSyncToken`,
-   `TrackDevice`, `EnforceQuota`, and `CorsForExtension` where applicable.
+   `TrackDevice` and `CorsForExtension` where applicable. Quotas are enforced
+   by `SyncStorageService` and `SyncQuota` under the same account lock and
+   transaction as the write, using replacement bytes rather than HTTP body size.
+6. **One change journal.** Both legacy and native writes append immutable
+   snapshots to the same transactional journal. Native clients use opaque
+   cursors and conditional operations described in [native-sync-api.md](native-sync-api.md).
 
 ## Mapping Table
 
@@ -63,8 +71,8 @@ It is maintained because:
 | Delete record          | `DELETE /collections/{name}/{id}` | (next: `deleted: true` flag)       |
 | Sync information       | `GET /sync/info`                  | `GET /storage/info`                |
 | Collection status      | `GET /sync/status`                | `GET/POST /sync/status`            |
-| Pairing (generate)     | —                                 | `POST /pair`                       |
-| Pairing (redeem)       | —                                 | `POST /pair/redeem`                |
+| Pairing (generate)     | `POST /pair`                      | `POST /pair` (same controller)     |
+| Pairing (redeem)       | `POST /pair/redeem`                | `POST /pair/redeem` (same controller) |
 | Crypto key bundle      | `GET/POST /crypto/keys`           | (same route, mounted under `ext`)  |
 
 ## Conditional Headers
@@ -103,11 +111,16 @@ both.
 
 `/api/ext` may be removed when:
 
-1. The extension supports Manifest V3 and an equivalent `/api/v1` MSP
-   client.
-2. The extension OAuth flow is rebuilt on top of `/api/v1` (with a
-   documented handshake endpoint).
-3. No supported ecosystem installations remain using the flat BSO contract.
+1. The native Desktop client and its resumable importer preserve existing
+   data and support the collections being migrated.
+2. Required authentication and pairing capabilities exist in `/api/v1`.
+3. Existing clients have migrated or been explicitly revoked, and the
+   announced compatibility window has ended.
+
+The extension runtime, packaging and exclusive dependencies are removed after
+the native migration is validated. A permanent MV3 extension is not required.
+Removing the client source and retiring the legacy server adapter are separate
+milestones; the latter does not justify keeping a redundant runtime.
 
 Until then, `/api/ext` remains a first-class API, although its public
 contract is narrower than `/api/v1`.
