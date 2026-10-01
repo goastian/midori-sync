@@ -1,5 +1,12 @@
 # Midori Sync — Encryption
 
+This document describes the extension-era format and proposed legacy rotation
+flow. Native V2 uses a versioned JSON envelope and the separate registry defined
+in [native-sync-api.md](native-sync-api.md). Migration must use the verified
+compatibility fixtures rather than infer guarantees from the older rotation
+description. Encryption of Sync records does not make Link's ordinary searchable
+library end-to-end encrypted.
+
 ## Overview
 
 Midori Sync uses **end-to-end encryption (E2EE)**. The server never has access to plaintext data. All encryption and decryption happens in the browser extension.
@@ -185,8 +192,10 @@ caller supplies the *current* passphrase and a new passphrase.
    `M_new = Argon2id(new_passphrase, salt_new)`.
 3. **Encrypt** `M_new` under a wrapping key derived from `new_passphrase
    + salt_new` and upload the new bundle to the server with version
-   `v+1`. The server keeps the previous bundle until the migration
-   completes (so other devices can still read existing data).
+   `v+1`. The legacy `/crypto/keys` endpoint stores only the latest bundle;
+   it does not retain the previous bundle for other devices. The native key
+   registry preserves previous bundles separately, but the resumable native
+   reciphering and retirement workflow is still under implementation.
 4. For each collection `C`, in order:
     1. Page records server-side using the existing `delta` cursor and
        `version` filter.
