@@ -4,6 +4,7 @@ namespace Tests;
 
 use App\Models\Collection;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Support\Facades\Http;
 
 abstract class TestCase extends BaseTestCase
 {
@@ -15,5 +16,6 @@ abstract class TestCase extends BaseTestCase
         // Reset it between tests so that RefreshDatabase rollbacks do not
         // leave stale model instances memoized across the suite.
         Collection::flushNameCache();
+        Http::preventStrayRequests();
     }
 }
