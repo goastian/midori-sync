@@ -101,7 +101,7 @@ function revokeAll() {
         <!-- Summary -->
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
             <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4">
-                <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Active tokens</p>
+                <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Active sessions</p>
                 <p class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ activeTokenCount }}</p>
             </div>
             <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4">
@@ -109,7 +109,7 @@ function revokeAll() {
                 <p class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ recentLogins.length }}</p>
             </div>
             <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4">
-                <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Expired / revoked</p>
+                <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Expired sessions</p>
                 <p class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">{{ expiredCount }}</p>
             </div>
         </div>
@@ -222,7 +222,8 @@ function revokeAll() {
                         <p class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
                             IP <span class="font-mono">{{ session.ip_address || 'unknown' }}</span>
                             · Created {{ formatDateTime(session.created_at) }}
-                            · {{ session.active ? 'Expires' : 'Expired' }} {{ formatDateTime(session.expires_at) }}
+                            · Access expires {{ formatDateTime(session.expires_at) }}
+                            <span v-if="session.refresh_expires_at">· Authorization ends {{ formatDateTime(session.refresh_expires_at) }}</span>
                         </p>
                     </div>
                     <button
