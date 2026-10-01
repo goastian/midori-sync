@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Library;
 
+use App\Jobs\Library\FetchLinkMetadata;
 use App\Models\Library\LibraryLink;
 use App\Models\User;
 use App\Services\Library\MetadataExtractor;
@@ -16,6 +17,7 @@ class LibraryWebTest extends TestCase
 
     public function test_web_crud_with_tags_and_flags(): void
     {
+        config(['library.fetch_enabled' => true]);
         $user = User::factory()->create();
         $this->actingAs($user);
         Http::fake([
@@ -62,6 +64,23 @@ class LibraryWebTest extends TestCase
 
         $this->withToken($token)->postJson('/api/library/links', ['url' => 'https://example.com/ext'])
             ->assertCreated();
+    }
+
+    public function test_disabled_fetch_does_not_leave_metadata_pending(): void
+    {
+        config(['library.fetch_enabled' => false]);
+        $user = User::factory()->create();
+        $link = LibraryLink::create([
+            'user_id' => $user->id,
+            'url' => 'https://example.com/article',
+            'canonical_url' => 'https://example.com/article',
+            'host' => 'example.com',
+            'title' => 'Article',
+        ]);
+
+        (new FetchLinkMetadata($link->id))->handle();
+
+        $this->assertSame('failed', $link->fresh()->metadata_status);
     }
 
     public function test_extractor_resolves_relative_urls_and_sanitizes(): void

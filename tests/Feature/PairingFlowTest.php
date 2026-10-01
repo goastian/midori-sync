@@ -4,8 +4,9 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use App\Services\SyncAuthService;
+use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /**
@@ -14,19 +15,20 @@ use Tests\TestCase;
  *   POST /api/ext/pair/redeem  (unauthenticated) -> exchanges pairing_token
  *                                                    for a sync session token
  *
- * Tokens are one-shot (Cache::pull) and short-lived (5 minutes).
+ * Tokens are hashed, consumed in a transaction and short-lived (5 minutes).
  */
 class PairingFlowTest extends TestCase
 {
     use RefreshDatabase;
 
     private User $user;
+
     private string $token;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(\Database\Seeders\CollectionSeeder::class);
+        $this->seed(CollectionSeeder::class);
 
         $this->user = User::factory()->create();
         $this->token = app(SyncAuthService::class)
@@ -41,8 +43,10 @@ class PairingFlowTest extends TestCase
         $response->assertOk()->assertJsonStructure(['pairing_token', 'expires_in']);
         $this->assertSame(300, $response->json('expires_in'));
 
-        $cached = Cache::get("pairing:{$response->json('pairing_token')}");
-        $this->assertSame($this->user->id, $cached['user_id']);
+        $this->assertDatabaseHas('sync_pairing_codes', [
+            'token_hash' => hash('sha256', $response->json('pairing_token')),
+            'user_id' => $this->user->id,
+        ]);
     }
 
     public function test_generate_requires_authentication(): void
@@ -76,7 +80,7 @@ class PairingFlowTest extends TestCase
         );
 
         // The pairing token is one-shot.
-        $this->assertNull(Cache::get("pairing:{$pairingToken}"));
+        $this->assertDatabaseMissing('sync_pairing_codes', ['token_hash' => hash('sha256', $pairingToken)]);
     }
 
     public function test_redeem_rejects_unknown_or_expired_pairing_token(): void
@@ -109,5 +113,30 @@ class PairingFlowTest extends TestCase
         $this->postJson('/api/ext/pair/redeem', [])
             ->assertStatus(422)
             ->assertJsonValidationErrors(['pairing_token', 'device_name']);
+    }
+
+    public function test_canonical_pairing_binds_distinct_devices_even_with_the_same_name(): void
+    {
+        $devices = [];
+        for ($i = 0; $i < 2; $i++) {
+            $code = $this->withToken($this->token)->postJson('/api/v1/pair')->assertOk()->json('pairing_token');
+            $redeemed = $this->postJson('/api/v1/pair/redeem', [
+                'pairing_token' => strtolower(implode('-', str_split($code, 4))),
+                'device_name' => 'Midori Desktop',
+            ])->assertCreated();
+            $devices[] = $redeemed->json('device.id');
+            $this->withToken($redeemed->json('token'))->getJson('/api/v1/sync/collections/bookmarks/changes')->assertOk();
+        }
+        $this->assertNotSame($devices[0], $devices[1]);
+    }
+
+    public function test_expired_code_is_not_redeemable_and_creates_no_session(): void
+    {
+        $code = $this->withToken($this->token)->postJson('/api/v1/pair')->assertOk()->json('pairing_token');
+        DB::table('sync_pairing_codes')->update(['expires_at' => now()->subSecond()]);
+        $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Expired'])
+            ->assertNotFound();
+        $this->assertDatabaseCount('devices', 0);
+        $this->assertDatabaseCount('sync_sessions', 1);
     }
 }

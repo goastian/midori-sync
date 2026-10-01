@@ -7,6 +7,7 @@ use App\Models\Record;
 use App\Models\SyncSession;
 use App\Models\User;
 use App\Models\UserCollection;
+use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -24,10 +25,10 @@ class ScheduledCommandsTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(\Database\Seeders\CollectionSeeder::class);
+        $this->seed(CollectionSeeder::class);
     }
 
-    public function test_cleanup_expired_removes_records_and_sessions(): void
+    public function test_cleanup_expired_tombstones_records_and_removes_sessions(): void
     {
         $user = User::factory()->create();
         $collection = Collection::first();
@@ -72,7 +73,7 @@ class ScheduledCommandsTest extends TestCase
             ->expectsOutputToContain('Cleaned up 1 expired records and 1 expired sessions')
             ->assertSuccessful();
 
-        $this->assertDatabaseMissing('records', ['record_id' => 'expired']);
+        $this->assertDatabaseHas('records', ['record_id' => 'expired', 'deleted' => true, 'payload' => '', 'version' => 2]);
         $this->assertDatabaseHas('records', ['record_id' => 'fresh']);
         $this->assertSame(1, SyncSession::count());
     }
@@ -122,7 +123,7 @@ class ScheduledCommandsTest extends TestCase
                 'id' => Str::uuid(),
                 'user_id' => $user->id,
                 'collection_id' => $collection->id,
-                'record_id' => 'r-' . $user->id,
+                'record_id' => 'r-'.$user->id,
                 'version' => 1,
                 'payload' => str_repeat('y', 50),
                 'modified_at' => microtime(true),

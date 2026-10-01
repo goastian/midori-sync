@@ -6,14 +6,15 @@ use App\Models\Collection;
 use App\Models\Record;
 use App\Models\User;
 use App\Services\SyncAuthService;
+use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /**
- * Covers App\Http\Middleware\EnforceQuota.
+ * Covers transactional quota enforcement in SyncStorageService.
  *
- * The middleware runs before write endpoints under /api/v1 and /api/ext.
+ * Both /api/v1 and /api/ext use the same storage quota check.
  * It must:
  *   - allow writes that fit in the remaining quota
  *   - return 403 when the request would exceed the user's quota
@@ -24,12 +25,13 @@ class EnforceQuotaTest extends TestCase
     use RefreshDatabase;
 
     private User $user;
+
     private string $token;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(\Database\Seeders\CollectionSeeder::class);
+        $this->seed(CollectionSeeder::class);
 
         // Tight quota so we can exercise the limit deterministically.
         $this->user = User::factory()->create(['storage_quota_bytes' => 1024]);
@@ -109,5 +111,43 @@ class EnforceQuotaTest extends TestCase
                 'payload' => base64_encode('hi'),
             ])
             ->assertOk();
+    }
+
+    public function test_replacement_counts_only_its_net_bytes_and_can_shrink_above_quota(): void
+    {
+        $this->withToken($this->token)->putJson('/api/v1/collections/bookmarks/a', ['payload' => str_repeat('a', 1024)])
+            ->assertOk();
+        $this->withToken($this->token)->putJson('/api/v1/collections/bookmarks/a', ['payload' => str_repeat('b', 1024)])
+            ->assertOk();
+        $this->user->update(['storage_quota_bytes' => 100]);
+        $this->withToken($this->token)->putJson('/api/v1/collections/bookmarks/a', ['payload' => str_repeat('c', 512)])
+            ->assertOk();
+        $this->withToken($this->token)->putJson('/api/v1/collections/bookmarks/a', ['payload' => str_repeat('d', 513)])
+            ->assertForbidden();
+        $this->withToken($this->token)->deleteJson('/api/v1/collections/bookmarks/a')->assertNoContent();
+    }
+
+    public function test_failed_quota_check_rolls_back_record_and_journal(): void
+    {
+        $this->withToken($this->token)->putJson('/api/v1/collections/bookmarks/a', ['payload' => str_repeat('a', 1024)])
+            ->assertOk();
+        $this->withToken($this->token)->putJson('/api/v1/collections/bookmarks/b', ['payload' => 'b'])
+            ->assertForbidden();
+        $this->assertDatabaseMissing('records', ['record_id' => 'b']);
+        $this->assertDatabaseCount('sync_changes', 1);
+        $this->assertDatabaseHas('sync_streams', ['sequence' => 1]);
+    }
+
+    public function test_quota_counts_utf8_bytes_and_ignores_expired_records(): void
+    {
+        $this->user->update(['storage_quota_bytes' => 3]);
+        $this->withToken($this->token)->putJson('/api/v1/collections/bookmarks/a', ['payload' => 'éé'])
+            ->assertForbidden();
+        $this->withToken($this->token)->putJson('/api/v1/collections/bookmarks/expired', [
+            'payload' => 'expired', 'ttl' => now()->subMinute()->toIso8601String(),
+        ])->assertOk();
+        $this->withToken($this->token)->putJson('/api/v1/collections/bookmarks/a', ['payload' => 'é'])
+            ->assertOk();
+        $this->withToken($this->token)->getJson('/api/v1/sync/info')->assertJsonPath('used_bytes', 2);
     }
 }
