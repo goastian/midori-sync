@@ -1,7 +1,7 @@
 <?php
 
 /*
- * Midori Sync — CORS policy for the extension/dashboard surface.
+ * Midori Sync — CORS policy for the API surface.
  *
  * `allowed_origins` is an exact-match list. `allowed_origin_patterns`
  * is a list of regular expressions (without delimiters; anchored
@@ -10,9 +10,7 @@
  * list receive no CORS headers (browser blocks the cross-origin
  * request).
  *
- * In `local` env, defaults include localhost:8000 and any
- * `moz-extension://...` and `chrome-extension://...` origin so the
- * extension can talk to a dev server without ad-hoc config.
+ * In `local` env, defaults include the local dashboard origins.
  */
 
 $origins = array_filter(array_map('trim', explode(
@@ -30,16 +28,12 @@ if (empty($origins) && empty($patterns) && env('APP_ENV') === 'local') {
         'http://localhost:8000',
         'http://127.0.0.1:8000',
     ];
-    $patterns = [
-        '^moz-extension://[a-z0-9-]+$',
-        '^chrome-extension://[a-z0-9]+$',
-    ];
 }
 
 return [
     // Laravel's built-in HandleCors middleware reads `paths`. We set it
     // to an empty array so HandleCors becomes a no-op for every route,
-    // and our `App\Http\Middleware\CorsForExtension` is the single
+    // and our `App\Http\Middleware\SyncApiCors` is the single
     // source of truth for CORS policy on `/api/ext` and `/api/v1`.
     'paths' => [],
 
