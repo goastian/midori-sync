@@ -7,6 +7,10 @@ use App\Http\Controllers\Web\DashboardController;
 use App\Http\Controllers\Web\DeviceController;
 use App\Http\Controllers\Web\LibraryController;
 use App\Http\Controllers\Web\SettingsController;
+use App\Models\User;
+use App\Services\SyncIdentityService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
 // Landing
@@ -15,7 +19,7 @@ Route::get('/', function () {
         return redirect('/dashboard');
     }
 
-    return inertia('Welcome');
+    return inertia('Welcome', ['localDevelopment' => Route::has('auth.local')]);
 });
 
 // Auth (Authentik OAuth)
@@ -23,11 +27,28 @@ Route::get('/auth/redirect', [AuthController::class, 'redirect'])->name('auth.re
 Route::get('/auth/callback', [AuthController::class, 'callback'])->name('auth.callback');
 Route::post('/auth/logout', [AuthController::class, 'logout'])->name('auth.logout');
 
+if (app()->environment(['local', 'testing']) && config('services.sync.local_dev') === true
+    && getenv('MIDORI_SYNC_DEV_ENV_DIR')) {
+    Route::post('/auth/local', function (Request $request) {
+        abort_unless(in_array($request->ip(), ['127.0.0.1', '::1'], true)
+            && in_array($request->getHost(), ['localhost', '127.0.0.1', '::1'], true), 404);
+        $user = User::where('authentik_id', 'midori-local-development')
+            ->where('authentik_issuer', SyncIdentityService::DEVELOPMENT_ISSUER)
+            ->firstOrFail();
+        Auth::login($user);
+        $request->session()->regenerate();
+
+        return redirect('/devices');
+    })->name('auth.local');
+}
+
 // Authenticated web routes
 Route::middleware('auth')->group(function () {
     Route::get('/dashboard', DashboardController::class)->name('dashboard');
 
     Route::get('/devices', [DeviceController::class, 'index'])->name('devices.index');
+    Route::post('/devices/pairing-code', [DeviceController::class, 'pairingCode'])
+        ->middleware('throttle:sync-pairing-web')->name('devices.pairing-code');
     Route::patch('/devices/{deviceId}', [DeviceController::class, 'update'])->name('devices.update');
     Route::delete('/devices/{deviceId}', [DeviceController::class, 'destroy'])->name('devices.destroy');
 

@@ -1,10 +1,13 @@
 <?php
 
+use App\Http\Middleware\HandleInertiaRequests;
+use App\Http\Middleware\NegotiateCompression;
+use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 
-return Application::configure(basePath: dirname(__DIR__))
+$app = Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
         api: __DIR__.'/../routes/api.php',
@@ -13,13 +16,17 @@ return Application::configure(basePath: dirname(__DIR__))
         apiPrefix: 'api',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->redirectGuestsTo(fn () => app()->environment(['local', 'testing'])
+            && config('services.sync.local_dev') === true && getenv('MIDORI_SYNC_DEV_ENV_DIR')
+                ? '/' : '/auth/redirect');
+
         $middleware->web(append: [
-            \App\Http\Middleware\HandleInertiaRequests::class,
-            \App\Http\Middleware\SecurityHeaders::class,
+            HandleInertiaRequests::class,
+            SecurityHeaders::class,
         ]);
 
         $middleware->api(prepend: [
-            \App\Http\Middleware\NegotiateCompression::class,
+            NegotiateCompression::class,
         ]);
 
         $middleware->throttleApi(
@@ -29,3 +36,12 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withExceptions(function (Exceptions $exceptions): void {
         //
     })->create();
+
+if ($environmentPath = getenv('MIDORI_SYNC_DEV_ENV_DIR')) {
+    if (! is_dir($environmentPath) || ! is_file($environmentPath.'/.env')) {
+        throw new RuntimeException('The isolated Sync environment is missing.');
+    }
+    $app->useEnvironmentPath($environmentPath);
+}
+
+return $app;

@@ -2,15 +2,18 @@
 
 use App\Http\Controllers\Api\Ext\ExtAuthController;
 use App\Http\Controllers\Api\Ext\ExtDeviceController;
-use App\Http\Controllers\Api\Ext\ExtPairingController;
 use App\Http\Controllers\Api\Ext\ExtStorageController;
+use App\Http\Controllers\Api\V1\AccountController;
 use App\Http\Controllers\Api\V1\AuthTokenController;
 use App\Http\Controllers\Api\V1\CollectionController;
 use App\Http\Controllers\Api\V1\CryptoKeyController;
 use App\Http\Controllers\Api\V1\DeviceController;
+use App\Http\Controllers\Api\V1\NativeCryptoController;
+use App\Http\Controllers\Api\V1\PairingController;
+use App\Http\Controllers\Api\V1\RefreshSessionController;
+use App\Http\Controllers\Api\V1\SyncChangesController;
 use App\Http\Controllers\Api\V1\SyncInfoController;
 use App\Http\Middleware\CorsForExtension;
-use App\Http\Middleware\EnforceQuota;
 use App\Http\Middleware\TrackDevice;
 use App\Http\Middleware\ValidateSyncToken;
 use Illuminate\Http\Request;
@@ -37,7 +40,7 @@ Route::prefix('ext')->middleware(CorsForExtension::class)->group(function () {
         Route::get('/auth/poll', [ExtAuthController::class, 'poll']);
 
         // Pairing redeem (unauthenticated — uses pairing token)
-        Route::post('/pair/redeem', [ExtPairingController::class, 'redeem']);
+        Route::post('/pair/redeem', [PairingController::class, 'redeem']);
     });
 
     // Authenticated extension endpoints
@@ -66,7 +69,7 @@ Route::prefix('ext')->middleware(CorsForExtension::class)->group(function () {
         Route::get('/storage/info', [SyncInfoController::class, 'info']);
 
         // Device pairing (generate token)
-        Route::post('/pair', [ExtPairingController::class, 'generate']);
+        Route::post('/pair', [PairingController::class, 'generate']);
 
         // Devices (list / rename / revoke) and full wipe
         Route::get('/devices', [ExtDeviceController::class, 'index']);
@@ -75,10 +78,8 @@ Route::prefix('ext')->middleware(CorsForExtension::class)->group(function () {
         Route::delete('/data', [ExtDeviceController::class, 'wipe']);
 
         // Storage (flat BSO array format)
-        Route::middleware(EnforceQuota::class)->group(function () {
-            Route::get('/storage/{collection}', [ExtStorageController::class, 'index']);
-            Route::post('/storage/{collection}', [ExtStorageController::class, 'store']);
-        });
+        Route::get('/storage/{collection}', [ExtStorageController::class, 'index']);
+        Route::post('/storage/{collection}', [ExtStorageController::class, 'store']);
     });
 });
 
@@ -90,26 +91,34 @@ Route::prefix('v1')->middleware(CorsForExtension::class)->group(function () {
 
     // Auth: exchange OAuth token for sync session token
     Route::post('/auth/token', [AuthTokenController::class, 'store']);
+    Route::get('/capabilities', [SyncChangesController::class, 'capabilities'])->middleware('throttle:sync-unauth');
+    Route::post('/pair/redeem', [PairingController::class, 'redeem'])->middleware('throttle:sync-unauth');
+    Route::post('/auth/refresh', [RefreshSessionController::class, 'store'])->middleware('throttle:sync-unauth');
+    Route::delete('/auth/refresh', [RefreshSessionController::class, 'destroy'])->middleware('throttle:sync-unauth');
 
     // Authenticated sync endpoints
     Route::middleware([ValidateSyncToken::class, TrackDevice::class])->group(function () {
 
         // Auth
         Route::delete('/auth/token', [AuthTokenController::class, 'destroy']);
+        Route::get('/account', [AccountController::class, 'show']);
+        Route::post('/pair', [PairingController::class, 'generate']);
 
         // Sync info
         Route::get('/sync/info', [SyncInfoController::class, 'info']);
         Route::get('/sync/status', [SyncInfoController::class, 'status']);
+        Route::get('/sync/collections/{name}/changes', [SyncChangesController::class, 'index']);
+        Route::post('/sync/collections/{name}/ack', [SyncChangesController::class, 'acknowledge']);
+        Route::post('/sync/collections/{name}/operations', [SyncChangesController::class, 'operations']);
+        Route::post('/sync/collections/history/clear', [SyncChangesController::class, 'clearHistory']);
 
         // Collections & Records
-        Route::middleware(EnforceQuota::class)->group(function () {
-            Route::get('/collections/{name}', [CollectionController::class, 'index']);
-            Route::get('/collections/{name}/{id}', [CollectionController::class, 'show']);
-            Route::put('/collections/{name}/{id}', [CollectionController::class, 'upsert']);
-            Route::post('/collections/{name}', [CollectionController::class, 'batchUpsert']);
-            Route::delete('/collections/{name}/{id}', [CollectionController::class, 'destroyRecord']);
-            Route::delete('/collections/{name}', [CollectionController::class, 'destroyCollection']);
-        });
+        Route::get('/collections/{name}', [CollectionController::class, 'index']);
+        Route::get('/collections/{name}/{id}', [CollectionController::class, 'show']);
+        Route::put('/collections/{name}/{id}', [CollectionController::class, 'upsert']);
+        Route::post('/collections/{name}', [CollectionController::class, 'batchUpsert']);
+        Route::delete('/collections/{name}/{id}', [CollectionController::class, 'destroyRecord']);
+        Route::delete('/collections/{name}', [CollectionController::class, 'destroyCollection']);
 
         // Devices
         Route::get('/devices', [DeviceController::class, 'index']);
@@ -117,6 +126,11 @@ Route::prefix('v1')->middleware(CorsForExtension::class)->group(function () {
         Route::delete('/devices/{id}', [DeviceController::class, 'destroy']);
 
         // Crypto key bundle
+        Route::get('/crypto/state', [NativeCryptoController::class, 'show']);
+        Route::post('/crypto/activate', [NativeCryptoController::class, 'activate']);
+        Route::post('/crypto/rotate', [NativeCryptoController::class, 'rotate']);
+        Route::put('/crypto/native-keys/{keyId}', [NativeCryptoController::class, 'rewrap']);
+        Route::delete('/sync/data', [NativeCryptoController::class, 'wipe']);
         Route::get('/crypto/keys', [CryptoKeyController::class, 'show']);
         Route::post('/crypto/keys', [CryptoKeyController::class, 'store']);
     });

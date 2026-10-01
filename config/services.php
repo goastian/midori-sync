@@ -36,6 +36,7 @@ return [
     ],
 
     'authentik' => [
+        'issuer' => env('AUTHENTIK_ISSUER'),
         'client_id' => env('AUTHENTIK_CLIENT_ID'),
         'client_secret' => env('AUTHENTIK_CLIENT_SECRET'),
         'base_url' => env('AUTHENTIK_BASE_URL'),
@@ -43,6 +44,7 @@ return [
     ],
 
     'sync' => [
+        'local_dev' => env('SYNC_LOCAL_DEV', false),
         'token_ttl' => env('SYNC_TOKEN_TTL', 3600),
         'max_record_size' => env('SYNC_MAX_RECORD_SIZE', 262144),
         'default_quota' => env('SYNC_DEFAULT_QUOTA', 104857600),

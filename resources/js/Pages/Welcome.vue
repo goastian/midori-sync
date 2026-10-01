@@ -1,4 +1,10 @@
 <script setup>
+import { Link } from '@inertiajs/vue3';
+
+defineProps({
+    localDevelopment: { type: Boolean, default: false },
+});
+
 const features = [
     { title: 'End-to-End Encryption', desc: 'XChaCha20-Poly1305 encryption ensures only you can read your data.' },
     { title: 'Cross-Device Sync', desc: 'Bookmarks, history, tabs, and settings — everywhere.' },
@@ -19,11 +25,15 @@ const features = [
                     <span class="font-semibold text-gray-900">Midori Sync</span>
                 </div>
                 <a
+                    v-if="!localDevelopment"
                     href="/auth/redirect"
                     class="px-4 py-1.5 bg-primary-600 text-white text-sm font-medium rounded-md hover:bg-primary-700 transition-colors"
                 >
                     Sign In
                 </a>
+                <Link v-else href="/auth/local" method="post" as="button" class="px-4 py-1.5 bg-primary-600 text-white text-sm font-medium rounded-md hover:bg-primary-700 transition-colors">
+                    Open local Sync
+                </Link>
             </div>
         </nav>
 
@@ -37,11 +47,15 @@ const features = [
                 Your data stays yours.
             </p>
             <a
+                v-if="!localDevelopment"
                 href="/auth/redirect"
                 class="inline-flex items-center px-6 py-2.5 bg-primary-600 text-white font-medium rounded-lg hover:bg-primary-700 transition-colors"
             >
                 Get Started
             </a>
+            <Link v-else href="/auth/local" method="post" as="button" class="inline-flex items-center px-6 py-2.5 bg-primary-600 text-white font-medium rounded-lg hover:bg-primary-700 transition-colors">
+                Open local Sync
+            </Link>
         </section>
 
         <!-- Features -->

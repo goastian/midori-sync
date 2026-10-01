@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\Library\BillingController;
 use App\Http\Controllers\Api\V1\Library\HighlightController;
 use App\Http\Controllers\Api\V1\Library\LibraryCollectionController;
 use App\Http\Controllers\Api\V1\Library\LinkController;
+use App\Http\Controllers\Api\V1\Library\SaveController;
 use App\Http\Controllers\Api\V1\Library\ShareController;
 use App\Http\Controllers\Api\V1\Library\TagController;
 use App\Http\Middleware\CheckLibraryEntitlement;
@@ -23,10 +24,14 @@ Route::prefix('library')->middleware([CorsForExtension::class, ValidateSyncToken
     Route::get('/entitlement', [BillingController::class, 'entitlement']);
     Route::get('/upgrade', [BillingController::class, 'upgrade']);
 
+    Route::post('/v1/saves', [SaveController::class, 'store']);
+    Route::get('/v1/changes', [LinkController::class, 'changes']);
+    Route::get('/v1/links', [LinkController::class, 'browse']);
+
     Route::get('/links/export', [LinkController::class, 'export']);
     Route::get('/links', [LinkController::class, 'index']);
-    Route::post('/links', [LinkController::class, 'store'])->middleware(CheckLibraryEntitlement::class.':links');
-    Route::post('/links/import', [LinkController::class, 'import'])->middleware(CheckLibraryEntitlement::class.':links');
+    Route::post('/links', [LinkController::class, 'store']);
+    Route::post('/links/import', [LinkController::class, 'import']);
     Route::post('/links/bulk', [LinkController::class, 'bulk']);
     Route::get('/links/{id}', [LinkController::class, 'show']);
     Route::patch('/links/{id}', [LinkController::class, 'update']);

@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue';
-import { router } from '@inertiajs/vue3';
+import { Link, router } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 
 const props = defineProps({
@@ -136,7 +136,10 @@ function formatTime(ts) {
 
         <!-- Devices -->
         <div class="mb-8">
-            <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">Connected Devices</h2>
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Connected Devices</h2>
+                <Link href="/devices" class="text-xs font-medium text-primary-600 dark:text-primary-400 hover:underline">Connect Midori Desktop</Link>
+            </div>
             <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg divide-y divide-gray-100 dark:divide-gray-800">
                 <div v-if="!devices?.length" class="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500">
                     No devices connected yet
