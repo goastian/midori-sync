@@ -1,0 +1,2344 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Midori Native Sync API",
+    "version": "0.2.0",
+    "description": "Implemented native-client profile of the Laravel API. Experimental: capabilities currently announce native_ready=false. This document covers pairing, session identity/renewal/revocation, incremental collections and native key lifecycle. Legacy extension endpoints, Link and future OAuth/PKCE flows are outside this contract. Send Accept: application/json and Content-Type: application/json for JSON bodies. Byte limits are UTF-8 byte limits, not JSON Schema character counts. See native-sync-api.md for transaction and migration semantics."
+  },
+  "servers": [
+    {
+      "url": "/api/v1",
+      "description": "This configured Sync instance"
+    },
+    {
+      "url": "http://127.0.0.1:8139/api/v1",
+      "description": "Isolated local development only; start with npm run dev:sync from Desktop"
+    },
+    {
+      "url": "https://sync.astian.org/api/v1",
+      "description": "Official configured URL; this specification does not assert native readiness of that deployment"
+    }
+  ],
+  "security": [
+    {
+      "SyncBearer": []
+    }
+  ],
+  "paths": {
+    "/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "summary": "Discover native protocol capabilities",
+        "description": "Public discovery; native_ready is deliberately false while release gates remain open.",
+        "responses": {
+          "200": {
+            "description": "Current capabilities",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "security": []
+      }
+    },
+    "/pair": {
+      "post": {
+        "operationId": "createPairingCode",
+        "summary": "Create a short-lived pairing code",
+        "description": "Requires an existing account session. The code is consumed atomically during redemption; it does not transfer E2EE keys.",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingCode"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/pair/redeem": {
+      "post": {
+        "operationId": "redeemNativePairingCode",
+        "summary": "Consume a code and create a native device session",
+        "description": "This contract describes native_client=true. Device names do not reuse device identity. Issuer binding is checked before consuming the code. native_refresh=true explicitly opts into version-1 renewable sessions (maximum 32 unexpired families per account); otherwise the original access-only behavior is preserved. No native OAuth/PKCE flow is implemented by this route.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativePairRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "New version-2 session and device",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativePairResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/account": {
+      "get": {
+        "operationId": "getNativeAccount",
+        "summary": "Read bound account identity and device",
+        "description": "The device must belong to the session user; issuer and subject must be bound. This response contains no bearer token.",
+        "responses": {
+          "200": {
+            "description": "Verified session identity",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/auth/token": {
+      "delete": {
+        "operationId": "revokeCurrentSession",
+        "summary": "Revoke the current bearer session",
+        "description": "Revokes this session only. Does not erase profile data, other devices, Sync records or Link. Revokes the session ID established by authentication under the shared account lock, including when its token rotates before this handler runs.",
+        "responses": {
+          "204": {
+            "description": "Session revoked; empty response"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/sync/collections/{name}/changes": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/CollectionName"
+        }
+      ],
+      "get": {
+        "operationId": "getCollectionChanges",
+        "summary": "Read a stable page of encrypted changes",
+        "description": "Start without a cursor. Follow next_cursor until has_more=false to finish the snapshot fence; later writes appear on a later poll. Downloading does not acknowledge. The sum of serialized record snapshots is capped at 4 MiB, excluding outer response overhead. Clients must also honor record TTL.",
+        "responses": {
+          "200": {
+            "description": "Ordered immutable changes within the snapshot fence",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadCursor"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
+            }
+          }
+        ]
+      }
+    },
+    "/sync/collections/{name}/ack": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/CollectionName"
+        }
+      ],
+      "post": {
+        "operationId": "acknowledgeCollectionChanges",
+        "summary": "Acknowledge durable application of a change page",
+        "description": "Send the received cursor only after all covered records are durably applied or explicitly quarantined. Persist download progress separately when dependencies remain. Repeated or older ACKs cannot reduce the stored position.",
+        "responses": {
+          "200": {
+            "description": "Monotonic stored acknowledgement",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Acknowledgement"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadCursor"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AckRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/collections/{name}/operations": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/CollectionName"
+        }
+      ],
+      "post": {
+        "operationId": "applyCollectionOperations",
+        "summary": "Apply conditional, idempotent encrypted writes",
+        "description": "Native accounts require an active key and current crypto precondition. Entire JSON body is limited to 4194304 bytes. Each input produces one result; HTTP 200 does not imply every operation succeeded. Preserve UUID and normalized operation exactly across retries. Applied and revision-conflict receipts are durable; quota and invalid outcomes are not cached. A matching old receipt can resolve after key rotation once the request crypto context is refreshed.",
+        "responses": {
+          "200": {
+            "description": "Individual ordered operation outcomes",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationsRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/crypto/state": {
+      "get": {
+        "operationId": "getNativeCryptoState",
+        "summary": "Read native key state and recovery bundles",
+        "description": "Requires a version-2 session and bound identity. State is created lazily. migration_required is a snapshot; activation rechecks under lock. At most eight keys are retained.",
+        "responses": {
+          "200": {
+            "description": "Conditional key state",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CryptoState"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/crypto/activate": {
+      "post": {
+        "operationId": "activateNativeKeys",
+        "summary": "Activate V2 on an empty account",
+        "description": "Requires no legacy records, recovery bundle or retained changes. Explicit revoke_incompatible=true is required to revoke live legacy sessions. Activation and generation reset commit together. Body limit 8192 bytes; bundles 2048 bytes. On a lost response, reread state and verify the exact key ID/bundle before retrying.",
+        "responses": {
+          "200": {
+            "description": "Activated key state",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CryptoState"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/crypto/rotate": {
+      "post": {
+        "operationId": "rotateNativeKey",
+        "summary": "Register a new active key and retain older bundles",
+        "description": "Body limit 8192 bytes. Does not recipher records, retire keys or complete multi-device rotation. Existing key IDs and capacity exhaustion produce conflicts.",
+        "responses": {
+          "200": {
+            "description": "New active key state",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CryptoState"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/crypto/native-keys/{keyId}": {
+      "parameters": [
+        {
+          "name": "keyId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/KeyId"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "rewrapNativeKey",
+        "summary": "Replace an existing wrapped recovery bundle",
+        "description": "Body limit 8192 bytes. The wrapped key ID must match the path. Does not change the active key. The server checks envelope shape; the client must verify recoverability.",
+        "responses": {
+          "200": {
+            "description": "Updated recovery bundle and revision",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CryptoState"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewrapRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/data": {
+      "delete": {
+        "operationId": "eraseSyncData",
+        "summary": "Explicitly erase Sync data and rotate generations",
+        "description": "Body limit 8192 bytes. Removes Sync records, key bundles, receipts and acknowledgements atomically. Rotates key epoch and stream generations. A native account remains native with no active key; legacy writing is not reenabled. Link data is separate and is not erased. Clients must reconcile the reset, never blindly republish old local data.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WipeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Sync data erased; empty response",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Includes no-store; Laravel may also include private."
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "operationId": "refreshNativeSession",
+        "summary": "Rotate native session credentials or recover the last rotation",
+        "security": [],
+        "description": "Renewal proof authenticates this request; no access bearer or cookies are required. User/session/device locks serialize rotation and revocation. Same consumed proof plus same operation returns the exact last receipt; a superseded receipt returns 409. Reuse with another operation revokes that session and all its receipts. Absolute renewal lifetime is 30 days from pairing, never extended. Minimum rotation interval is min(60, floor(access TTL / 2)) seconds; access TTL is clamped to 60–3600 seconds and truncated at absolute renewal expiry. This is the MSP protocol, not a complete OAuth implementation.",
+        "requestBody": {
+          "required": true,
+          "description": "JSON object; at most 4096 UTF-8 bytes. Unexpected properties are rejected. Proofs must never be sent in query parameters.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Same session, device, identity and absolute renewal expiration; new access and renewal proofs.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_refresh or refresh_reused. Reuse revocation is committed before this error is returned.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "refresh_superseded, refresh_operation_conflict, refresh_capacity, refresh_identity_changed, native_identity_required, identity_issuer_mismatch or invalid_account_identity. Preserve local custody and pending operations.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid_refresh_request; always JSON, including when Accept is absent.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited: honor Retry-After. Applies to both per-IP request limits and per-session rotation interval; exact receipt replay bypasses only the per-session interval.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              },
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Seconds until retry."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "refresh_receipt_unavailable: the last encrypted receipt cannot be recovered. Preserve the operation ID and contact the server administrator; do not send a different operation with a consumed proof.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "revokeNativeRefreshSession",
+        "summary": "Revoke the session using current or consumed renewal proof",
+        "security": [],
+        "description": "Idempotent proof-based revocation, usable after access expiry. The current proof or any retained consumed proof deletes the session and all receipts. Unknown/already-revoked proofs also return 204 without revealing existence. Other sessions and devices are retained. No access bearer is required.",
+        "requestBody": {
+          "required": true,
+          "description": "JSON object; at most 4096 UTF-8 bytes. Unexpected properties are rejected. Proofs must never be sent in query parameters.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRevokeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Session is absent; no response body.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid_refresh_request",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited: honor Retry-After. Applies to both per-IP request limits and per-session rotation interval; exact receipt replay bypasses only the per-session interval.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Contains no-store."
+              },
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Seconds until retry."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "SyncBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Opaque Sync session token, not an OIDC access token. Store in the profile vault. Native key endpoints require a server-issued version-2 session."
+      }
+    },
+    "parameters": {
+      "CollectionName": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Collection"
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing, invalid, expired or revoked session. Middleware messages are human-readable; transactional checks may return auth_required.",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "no-store on successful native data responses and protocol errors."
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "InvalidRequest": {
+        "description": "Laravel request validation error, or native envelope validation error (invalid_native_bundle).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ValidationError"
+                },
+                {
+                  "$ref": "#/components/schemas/Error"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Invalid protocol request, including invalid_batch_size.",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "no-store on successful native data responses and protocol errors."
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "BadCursor": {
+        "description": "invalid_cursor: malformed or bound to another account, device or collection.",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "no-store on successful native data responses and protocol errors."
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Unknown collection or key, or invalid/expired/consumed pairing code. Pairing currently returns a human-readable error string.",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "no-store on successful native data responses and protocol errors."
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "State conflict. Codes include device_required, native_identity_required, identity_issuer_mismatch, invalid_account_identity, reset_required, crypto_state_conflict, native_keys_required, native_keys_already_active, legacy_migration_required, incompatible_devices, key_id_exists, key_capacity_reached, key_version_exhausted and revision_exhausted. Preserve pending data and reconcile; never infer a lost write failed from a conflict. Native pairing may also return native_session_required or refresh_session_capacity without consuming its code.",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "no-store on successful native data responses and protocol errors."
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "TooLarge": {
+        "description": "request_too_large, batch_too_large or record_too_large.",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "no-store on successful native data responses and protocol errors."
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "UpgradeRequired": {
+        "description": "client_upgrade_required: native write barrier rejects a legacy session or mutation path.",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "no-store on successful native data responses and protocol errors."
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Rate limit exceeded. Honor Retry-After; the framework response is not a Sync protocol error.",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "Seconds until retry."
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "UUID": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "Counter": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]*)$",
+        "maxLength": 19,
+        "description": "Decimal counter, carried as a string to avoid JavaScript rounding."
+      },
+      "Revision": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]{0,9})$",
+        "description": "Decimal CAS revision. Stored record/key-state revisions cannot exceed 2147483647."
+      },
+      "Cursor": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "description": "Opaque authenticated server token bound to account, device, collection and generation. Never parse or manufacture it."
+      },
+      "RecordId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255,
+        "description": "Opaque collection record ID. Native non-deleted records additionally forbid control characters and are limited to 255 UTF-8 bytes."
+      },
+      "KeyId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{21}[AQgw]$",
+        "minLength": 22,
+        "maxLength": 22,
+        "description": "Canonical unpadded base64url encoding of exactly 16 bytes."
+      },
+      "Collection": {
+        "type": "string",
+        "enum": [
+          "bookmarks",
+          "history",
+          "tabs",
+          "browser-settings",
+          "midori-tab",
+          "midori-privacy",
+          "devices",
+          "passwords"
+        ]
+      },
+      "Identity": {
+        "type": "object",
+        "properties": {
+          "issuer": {
+            "type": "string",
+            "maxLength": 2048,
+            "description": "Exact configured OIDC issuer, including trailing slash. Explicit local mode uses urn:midori:sync:local."
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "oidc",
+              "development"
+            ]
+          }
+        },
+        "required": [
+          "issuer",
+          "subject",
+          "kind"
+        ]
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "email"
+        ]
+      },
+      "Device": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "desktop",
+              "mobile",
+              "tablet"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type"
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "ValidationError": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "message",
+          "errors"
+        ]
+      },
+      "CryptoContext": {
+        "type": "object",
+        "properties": {
+          "epoch": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "epoch",
+          "revision"
+        ],
+        "additionalProperties": false
+      },
+      "WrappedKey": {
+        "type": "object",
+        "properties": {
+          "key_id": {
+            "$ref": "#/components/schemas/KeyId"
+          },
+          "encrypted_bundle": {
+            "type": "string",
+            "maxLength": 2048,
+            "description": "JSON text of the V2 recovery envelope, at most 2048 UTF-8 bytes. Exact fields: bundle_version=2, crypto_version=2, key_id, kdf (argon2id13, memory_kib=65536, iterations=3, parallelism=1), salt (16 bytes), nonce (24 bytes), ciphertext (48 bytes); binary fields use canonical padded base64. The client must verify AEAD, account scope and recoverability.",
+            "contentMediaType": "application/json",
+            "contentSchema": {
+              "$ref": "#/components/schemas/RecoveryEnvelope"
+            }
+          }
+        },
+        "required": [
+          "key_id",
+          "encrypted_bundle"
+        ]
+      },
+      "CryptoState": {
+        "type": "object",
+        "properties": {
+          "crypto_state_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "epoch": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "native"
+            ]
+          },
+          "active_key_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KeyId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "incompatible_sessions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "migration_required": {
+            "type": "boolean"
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WrappedKey"
+            },
+            "maxItems": 8
+          }
+        },
+        "required": [
+          "crypto_state_version",
+          "epoch",
+          "revision",
+          "mode",
+          "active_key_id",
+          "incompatible_sessions",
+          "migration_required",
+          "keys"
+        ]
+      },
+      "Account": {
+        "type": "object",
+        "properties": {
+          "account_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "identity": {
+            "$ref": "#/components/schemas/Identity"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "device": {
+            "$ref": "#/components/schemas/Device"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "account_version",
+          "identity",
+          "user",
+          "device",
+          "expires_at"
+        ]
+      },
+      "PairingCode": {
+        "type": "object",
+        "properties": {
+          "pairing_token": {
+            "type": "string",
+            "pattern": "^[A-F0-9]{16}$",
+            "description": "Secret, single-use pairing code. Store neither the code nor this response in logs."
+          },
+          "expires_in": {
+            "type": "integer",
+            "description": "Validity in seconds; configured server-side, 300 by default."
+          }
+        },
+        "required": [
+          "pairing_token",
+          "expires_in"
+        ]
+      },
+      "NativePairRequest": {
+        "type": "object",
+        "properties": {
+          "pairing_token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "device_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "device_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "desktop",
+                  "mobile",
+                  "tablet"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "desktop"
+          },
+          "native_client": {
+            "type": "boolean",
+            "const": true
+          },
+          "native_refresh": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicit opt-in. Requires native_client=true. Omission never issues a renewable credential."
+          }
+        },
+        "required": [
+          "pairing_token",
+          "device_name",
+          "native_client"
+        ]
+      },
+      "NativePairResponse": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "Opaque bearer secret. Never log it."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_in": {
+            "type": "integer"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/Identity"
+          },
+          "user": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/User"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "avatar_url": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "avatar_url"
+                ]
+              }
+            ]
+          },
+          "device": {
+            "$ref": "#/components/schemas/Device"
+          },
+          "refresh_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "refresh_token": {
+            "$ref": "#/components/schemas/RefreshToken"
+          },
+          "refresh_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at",
+          "expires_in",
+          "identity",
+          "user",
+          "device"
+        ],
+        "dependentRequired": {
+          "refresh_version": [
+            "refresh_version",
+            "refresh_token",
+            "refresh_expires_at"
+          ],
+          "refresh_token": [
+            "refresh_version",
+            "refresh_token",
+            "refresh_expires_at"
+          ],
+          "refresh_expires_at": [
+            "refresh_version",
+            "refresh_token",
+            "refresh_expires_at"
+          ]
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "properties": {
+          "link": {
+            "type": "object",
+            "description": "Only the implemented native Link save contract is advertised. It uses the same instance under /api/library; see native-link.openapi.json.",
+            "required": [
+              "save_version",
+              "save_request_bytes",
+              "save_receipts_per_account"
+            ],
+            "properties": {
+              "save_version": {
+                "type": "integer",
+                "const": 1
+              },
+              "save_request_bytes": {
+                "type": "integer",
+                "const": 32768
+              },
+              "save_receipts_per_account": {
+                "type": "integer",
+                "const": 100000
+              }
+            }
+          },
+          "protocol": {
+            "type": "string",
+            "const": "MSP"
+          },
+          "native_ready": {
+            "type": "boolean",
+            "const": false
+          },
+          "account_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "authentication": {
+            "type": "object",
+            "properties": {
+              "pairing": {
+                "type": "boolean"
+              },
+              "development": {
+                "type": "boolean"
+              },
+              "issuer": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "refresh": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "request_bytes": {
+                    "type": "integer",
+                    "const": 4096
+                  },
+                  "lifetime_seconds": {
+                    "type": "integer",
+                    "const": 2592000
+                  },
+                  "receipts_per_session": {
+                    "type": "integer",
+                    "const": 1024
+                  },
+                  "sessions_per_account": {
+                    "type": "integer",
+                    "const": 32
+                  }
+                },
+                "required": [
+                  "version",
+                  "request_bytes",
+                  "lifetime_seconds",
+                  "receipts_per_session",
+                  "sessions_per_account"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "pairing",
+              "development",
+              "issuer"
+            ]
+          },
+          "changes_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "operations_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "crypto_state_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "crypto_versions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "const": 2
+            },
+            "minItems": 1
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "change_page_records": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "change_page_payload_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "record_payload_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "operation_batch_records": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "operation_batch_bytes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "change_page_records",
+              "change_page_payload_bytes",
+              "record_payload_bytes",
+              "operation_batch_records",
+              "operation_batch_bytes"
+            ]
+          }
+        },
+        "required": [
+          "protocol",
+          "native_ready",
+          "account_version",
+          "authentication",
+          "changes_version",
+          "operations_version",
+          "crypto_state_version",
+          "crypto_versions",
+          "features",
+          "limits"
+        ]
+      },
+      "Record": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/RecordId"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "payload": {
+            "type": "string",
+            "description": "Opaque ciphertext; empty for tombstones. Native records use a V2 purpose=record envelope. Limits are in bytes from capabilities, not Unicode character counts."
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "ttl": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "payload",
+          "deleted",
+          "ttl"
+        ]
+      },
+      "Change": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "$ref": "#/components/schemas/Counter"
+          },
+          "record": {
+            "$ref": "#/components/schemas/Record"
+          }
+        },
+        "required": [
+          "sequence",
+          "record"
+        ]
+      },
+      "ChangePage": {
+        "type": "object",
+        "properties": {
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Change"
+            },
+            "maxItems": 100
+          },
+          "snapshot_sequence": {
+            "$ref": "#/components/schemas/Counter"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "$ref": "#/components/schemas/Cursor"
+          }
+        },
+        "required": [
+          "generation",
+          "changes",
+          "snapshot_sequence",
+          "has_more",
+          "next_cursor"
+        ]
+      },
+      "AckRequest": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/Cursor"
+          }
+        },
+        "required": [
+          "cursor"
+        ]
+      },
+      "Acknowledgement": {
+        "type": "object",
+        "properties": {
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "acknowledged_sequence": {
+            "$ref": "#/components/schemas/Counter"
+          }
+        },
+        "required": [
+          "generation",
+          "acknowledged_sequence"
+        ]
+      },
+      "Operation": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "id": {
+            "$ref": "#/components/schemas/RecordId"
+          },
+          "base_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "deleted": {
+            "type": "boolean",
+            "default": false
+          },
+          "payload": {
+            "type": "string",
+            "description": "V2 record-envelope JSON using the active key. Envelope context must match collection, record ID, generation, schema_version=1 and base_revision. Native envelope hard limit: 262144 UTF-8 bytes, also subject to the configured record limit. For a tombstone, omit or send an empty string.",
+            "contentMediaType": "application/json",
+            "contentSchema": {
+              "$ref": "#/components/schemas/NativeRecordEnvelope"
+            }
+          },
+          "ttl": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "Expiration is normalized to UTC whole seconds; clients must also enforce TTL before server cleanup runs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "id",
+          "base_revision"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "deleted": {
+                  "const": true
+                }
+              },
+              "required": [
+                "deleted"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "const": ""
+                }
+              }
+            },
+            "else": {
+              "required": [
+                "payload"
+              ],
+              "properties": {
+                "payload": {
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        ]
+      },
+      "OperationsRequest": {
+        "type": "object",
+        "properties": {
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Operation"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "generation",
+          "crypto",
+          "operations"
+        ]
+      },
+      "OperationResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 99
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "applied",
+                  "conflict"
+                ]
+              },
+              "operation_id": {
+                "$ref": "#/components/schemas/UUID"
+              },
+              "id": {
+                "$ref": "#/components/schemas/RecordId"
+              },
+              "revision": {
+                "$ref": "#/components/schemas/Revision"
+              }
+            },
+            "required": [
+              "index",
+              "status",
+              "operation_id",
+              "id",
+              "revision"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 99
+              },
+              "status": {
+                "type": "string",
+                "const": "quota_exceeded"
+              },
+              "operation_id": {
+                "$ref": "#/components/schemas/UUID"
+              },
+              "id": {
+                "$ref": "#/components/schemas/RecordId"
+              }
+            },
+            "required": [
+              "index",
+              "status",
+              "operation_id",
+              "id"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 99
+              },
+              "status": {
+                "type": "string",
+                "const": "idempotency_conflict"
+              },
+              "operation_id": {
+                "$ref": "#/components/schemas/UUID"
+              }
+            },
+            "required": [
+              "index",
+              "status",
+              "operation_id"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 99
+              },
+              "status": {
+                "type": "string",
+                "const": "invalid"
+              },
+              "operation_id": {
+                "$ref": "#/components/schemas/UUID"
+              }
+            },
+            "required": [
+              "index",
+              "status"
+            ]
+          }
+        ]
+      },
+      "OperationsResponse": {
+        "type": "object",
+        "properties": {
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationResult"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "generation",
+          "results"
+        ]
+      },
+      "ActivateRequest": {
+        "type": "object",
+        "properties": {
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          },
+          "key_id": {
+            "$ref": "#/components/schemas/KeyId"
+          },
+          "encrypted_bundle": {
+            "$ref": "#/components/schemas/WrappedKey/properties/encrypted_bundle"
+          },
+          "revoke_incompatible": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "crypto",
+          "key_id",
+          "encrypted_bundle"
+        ]
+      },
+      "RotateRequest": {
+        "type": "object",
+        "properties": {
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          },
+          "key_id": {
+            "$ref": "#/components/schemas/KeyId"
+          },
+          "encrypted_bundle": {
+            "$ref": "#/components/schemas/WrappedKey/properties/encrypted_bundle"
+          }
+        },
+        "required": [
+          "crypto",
+          "key_id",
+          "encrypted_bundle"
+        ]
+      },
+      "RewrapRequest": {
+        "type": "object",
+        "properties": {
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          },
+          "encrypted_bundle": {
+            "$ref": "#/components/schemas/WrappedKey/properties/encrypted_bundle"
+          }
+        },
+        "required": [
+          "crypto",
+          "encrypted_bundle"
+        ]
+      },
+      "WipeRequest": {
+        "type": "object",
+        "properties": {
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          }
+        },
+        "required": [
+          "crypto"
+        ]
+      },
+      "NativeKdf": {
+        "type": "object",
+        "properties": {
+          "algorithm": {
+            "type": "string",
+            "const": "argon2id13"
+          },
+          "memory_kib": {
+            "type": "integer",
+            "const": 65536
+          },
+          "iterations": {
+            "type": "integer",
+            "const": 3
+          },
+          "parallelism": {
+            "type": "integer",
+            "const": 1
+          }
+        },
+        "required": [
+          "algorithm",
+          "memory_kib",
+          "iterations",
+          "parallelism"
+        ],
+        "additionalProperties": false
+      },
+      "RecoveryEnvelope": {
+        "type": "object",
+        "properties": {
+          "bundle_version": {
+            "type": "integer",
+            "const": 2
+          },
+          "crypto_version": {
+            "type": "integer",
+            "const": 2
+          },
+          "key_id": {
+            "$ref": "#/components/schemas/KeyId"
+          },
+          "kdf": {
+            "$ref": "#/components/schemas/NativeKdf"
+          },
+          "salt": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "minLength": 24,
+            "maxLength": 24,
+            "description": "Canonical padded base64 of exactly 16 bytes; server also checks canonical padding bits."
+          },
+          "nonce": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "minLength": 32,
+            "maxLength": 32,
+            "description": "Canonical padded base64 of exactly 24 bytes; server also checks canonical padding bits."
+          },
+          "ciphertext": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "Canonical padded base64 of exactly 48 bytes; server also checks canonical padding bits."
+          }
+        },
+        "required": [
+          "bundle_version",
+          "crypto_version",
+          "key_id",
+          "kdf",
+          "salt",
+          "nonce",
+          "ciphertext"
+        ],
+        "additionalProperties": false
+      },
+      "RecordContext": {
+        "type": "object",
+        "properties": {
+          "collection": {
+            "$ref": "#/components/schemas/Collection"
+          },
+          "id": {
+            "$ref": "#/components/schemas/RecordId"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "base_revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "collection",
+          "id",
+          "generation",
+          "schema_version",
+          "base_revision"
+        ],
+        "additionalProperties": false
+      },
+      "NativeRecordEnvelope": {
+        "type": "object",
+        "properties": {
+          "crypto_version": {
+            "type": "integer",
+            "const": 2
+          },
+          "key_id": {
+            "$ref": "#/components/schemas/KeyId"
+          },
+          "purpose": {
+            "type": "string",
+            "const": "record"
+          },
+          "context": {
+            "$ref": "#/components/schemas/RecordContext"
+          },
+          "nonce": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "minLength": 32,
+            "maxLength": 32,
+            "description": "Canonical padded base64 of exactly 24 bytes; server also checks canonical padding bits."
+          },
+          "ciphertext": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "minLength": 24,
+            "maxLength": 253356,
+            "description": "Canonical padded base64 encoding of 16–190016 bytes, including the AEAD tag. The server checks decoded length and canonical padding."
+          }
+        },
+        "required": [
+          "crypto_version",
+          "key_id",
+          "purpose",
+          "context",
+          "nonce",
+          "ciphertext"
+        ],
+        "additionalProperties": false
+      },
+      "RefreshToken": {
+        "type": "string",
+        "pattern": "^mrf_[0-9a-f]{64}$",
+        "minLength": 68,
+        "maxLength": 68,
+        "description": "Opaque renewal proof, distinct from the access bearer. Never log it or place it in a URL."
+      },
+      "RefreshOperationId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-4[0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$",
+        "description": "Persist before sending. Repeat the same ID after an uncertain response; the server returns it in lowercase."
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "properties": {
+          "refresh_token": {
+            "$ref": "#/components/schemas/RefreshToken"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/RefreshOperationId"
+          }
+        },
+        "required": [
+          "refresh_token",
+          "operation_id"
+        ],
+        "additionalProperties": false
+      },
+      "RefreshRevokeRequest": {
+        "type": "object",
+        "properties": {
+          "refresh_token": {
+            "$ref": "#/components/schemas/RefreshToken"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "additionalProperties": false
+      },
+      "RefreshResponse": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "Opaque bearer secret. Never log it."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600
+          },
+          "identity": {
+            "$ref": "#/components/schemas/Identity"
+          },
+          "device": {
+            "$ref": "#/components/schemas/Device"
+          },
+          "refresh_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "refresh_token": {
+            "$ref": "#/components/schemas/RefreshToken"
+          },
+          "refresh_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "account_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/RefreshOperationId"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at",
+          "expires_in",
+          "identity",
+          "device",
+          "refresh_version",
+          "refresh_token",
+          "refresh_expires_at",
+          "account_version",
+          "operation_id",
+          "user"
+        ],
+        "additionalProperties": false,
+        "description": "Exact response from the committed rotation. A recovered response may have expired access credentials: durably store its new refresh proof, then rotate again with a new persisted operation ID before using protected APIs. expires_in describes the original issuance time, not the replay time."
+      }
+    }
+  }
+}

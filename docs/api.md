@@ -4,7 +4,13 @@ Base URL: `https://your-server.com/api/v1`
 
 ## Authentication
 
-All API endpoints (except token exchange) require a Bearer token in the `Authorization` header.
+Sync API endpoints require a Sync Bearer token in the `Authorization` header,
+except public capabilities and pairing-code redemption. Token exchange instead
+requires the OAuth Bearer token being exchanged.
+
+The native client change feed, device acknowledgements and conditional operation batches are documented in [Native Sync API](native-sync-api.md), with a [machine-readable OpenAPI contract](native-sync.openapi.json). Existing timestamp-based endpoints remain available during migration.
+
+Native Link save receipts use `/api/library/v1/saves` on the same configured instance; see the [Link contract](native-link-api.md) and [OpenAPI schema](native-link.openapi.json).
 
 ### Exchange OAuth Token for Sync Token
 
