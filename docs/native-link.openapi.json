@@ -3,7 +3,7 @@
   "info": {
     "title": "Midori Link native save API",
     "version": "1.0.0",
-    "description": "Implemented save receipts for the processed Link mode. URLs and titles are visible to the Link server. This contract does not advertise an incremental feed, offline client, conditional undo, or private Link. Sync native_ready remains false."
+    "description": "Implemented save receipts, current-library browsing and an account-scoped revisioned link feed for the processed Link mode. URLs and titles are visible to the Link server. The feed covers link metadata and deletions, but conditional offline editing, collection/annotation feeds and a durable Desktop cache remain pending. Sync native_ready remains false."
   },
   "servers": [
     {
@@ -25,6 +25,73 @@
     }
   ],
   "paths": {
+    "/v1/changes": {
+      "get": {
+        "operationId": "readLinkChanges",
+        "summary": "Read an ordered page of link changes and tombstones",
+        "description": "The encrypted cursor is bound to the account and stream generation. A page has a stable snapshot_sequence fence. Keep next_cursor after each applied page; after has_more=false use it for the next poll. Mutations from native saves, web/API edits, metadata jobs, tag changes and deletions enter the same PostgreSQL transaction as the event. This feed currently covers link metadata only.",
+        "parameters": [
+          {
+            "name": "cursor", "in": "query",
+            "schema": { "type": "string", "maxLength": 4096 }
+          },
+          {
+            "name": "limit", "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 50, "default": 50 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One fenced page of ordered link changes.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FeedResponse" } } },
+            "headers": {
+              "Cache-Control": { "schema": { "type": "string" }, "description": "Contains no-store." }
+            }
+          },
+          "401": { "description": "Missing, invalid, expired or revoked bearer session." },
+          "409": { "description": "The feed generation changed; restart from an empty cursor." },
+          "413": { "description": "A single link metadata record exceeds the page byte limit." },
+          "422": { "description": "Invalid page limit or cursor." }
+        }
+      }
+    },
+    "/v1/links": {
+      "get": {
+        "operationId": "browseLinks",
+        "summary": "Browse current links using a stable keyset cursor",
+        "description": "Returns the authenticated account's non-deleted links, newest first by created_at and UUID. The response excludes article HTML and snapshots. Use a fresh cursor to restart a browse; this is not a change feed and does not report deletions or edits between pages.",
+        "parameters": [
+          {
+            "name": "per_page",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 50, "default": 25 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": { "type": "string", "maxLength": 512 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of current account-owned links.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BrowseResponse" }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": { "type": "string" },
+                "description": "Contains no-store."
+              }
+            }
+          },
+          "401": { "description": "Missing, invalid, expired or revoked bearer session." },
+          "422": { "description": "Invalid page size or cursor parameter." }
+        }
+      }
+    },
     "/v1/saves": {
       "post": {
         "operationId": "saveLink",
@@ -239,6 +306,69 @@
       }
     },
     "schemas": {
+      "FeedResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "generation", "changes", "has_more", "snapshot_sequence", "next_cursor"],
+        "properties": {
+          "version": { "type": "integer", "const": 1 },
+          "generation": { "type": "string", "format": "uuid" },
+          "changes": { "type": "array", "maxItems": 50, "items": { "$ref": "#/components/schemas/FeedChange" } },
+          "has_more": { "type": "boolean" },
+          "snapshot_sequence": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" },
+          "next_cursor": { "type": "string" }
+        }
+      },
+      "FeedChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sequence", "link_id", "revision", "deleted", "value"],
+        "properties": {
+          "sequence": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+          "link_id": { "type": "string", "format": "uuid" },
+          "revision": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+          "deleted": { "type": "boolean" },
+          "value": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/BrowseLink" },
+              { "type": "null" }
+            ]
+          }
+        }
+      },
+      "BrowseResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "items", "next_cursor"],
+        "properties": {
+          "version": { "type": "integer", "const": 1 },
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": { "$ref": "#/components/schemas/BrowseLink" }
+          },
+          "next_cursor": { "type": ["string", "null"] }
+        }
+      },
+      "BrowseLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "url", "title", "description", "library_collection_id", "is_read", "is_archived", "is_favorite", "is_pinned", "tags", "created_at", "updated_at"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "url": { "type": "string" },
+          "title": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "library_collection_id": { "type": ["integer", "null"] },
+          "is_read": { "type": "boolean" },
+          "is_archived": { "type": "boolean" },
+          "is_favorite": { "type": "boolean" },
+          "is_pinned": { "type": "boolean" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
       "SaveRequest": {
         "type": "object",
         "required": [

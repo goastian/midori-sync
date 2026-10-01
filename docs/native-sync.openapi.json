@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Midori Native Sync API",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Implemented native-client profile of the Laravel API. Experimental: capabilities currently announce native_ready=false. This document covers pairing, session identity/renewal/revocation, incremental collections and native key lifecycle. Legacy extension endpoints, Link and future OAuth/PKCE flows are outside this contract. Send Accept: application/json and Content-Type: application/json for JSON bodies. Byte limits are UTF-8 byte limits, not JSON Schema character counts. See native-sync-api.md for transaction and migration semantics."
   },
   "servers": [
@@ -901,6 +901,55 @@
           }
         }
       }
+    },
+    "/sync/collections/history/clear": {
+      "post": {
+        "operationId": "clearHistoryAcrossDevices",
+        "summary": "Clear synchronized history across devices",
+        "description": "Native version-2 session only. The authenticated transaction removes history records, changes and outstanding operation receipts, rotates only the history generation, and records a durable cutoff. A retry with the same operation_id and previous generation returns the original response. Old cursors and writes fail with reset_required. Clients must process the history_clear marker before capturing or uploading local history.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryClearRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "History clear committed or an idempotent replay",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryClearResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1520,11 +1569,16 @@
         "properties": {
           "link": {
             "type": "object",
-            "description": "Only the implemented native Link save contract is advertised. It uses the same instance under /api/library; see native-link.openapi.json.",
+            "description": "Implemented native Link save, cursor-browse and revisioned link-feed contracts on the same instance under /api/library; see native-link.openapi.json. The feed does not yet cover collection or annotation changes.",
             "required": [
               "save_version",
               "save_request_bytes",
-              "save_receipts_per_account"
+              "save_receipts_per_account",
+              "browse_version",
+              "browse_page_limit",
+              "feed_version",
+              "feed_page_limit",
+              "feed_page_bytes"
             ],
             "properties": {
               "save_version": {
@@ -1538,6 +1592,26 @@
               "save_receipts_per_account": {
                 "type": "integer",
                 "const": 100000
+              },
+              "browse_version": {
+                "type": "integer",
+                "const": 1
+              },
+              "browse_page_limit": {
+                "type": "integer",
+                "const": 50
+              },
+              "feed_version": {
+                "type": "integer",
+                "const": 1
+              },
+              "feed_page_limit": {
+                "type": "integer",
+                "const": 50
+              },
+              "feed_page_bytes": {
+                "type": "integer",
+                "const": 524288
               }
             }
           },
@@ -1758,6 +1832,9 @@
           },
           "next_cursor": {
             "$ref": "#/components/schemas/Cursor"
+          },
+          "reset": {
+            "$ref": "#/components/schemas/HistoryClearMarker"
           }
         },
         "required": [
@@ -2338,6 +2415,73 @@
         ],
         "additionalProperties": false,
         "description": "Exact response from the committed rotation. A recovered response may have expired access credentials: durably store its new refresh proof, then rotate again with a new persisted operation ID before using protected APIs. expires_in describes the original issuance time, not the replay time."
+      },
+      "HistoryClearMarker": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "history_clear"
+          },
+          "clear_before": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC cutoff; visits at or before this millisecond must not be uploaded again."
+          }
+        },
+        "required": [
+          "kind",
+          "clear_before"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryClearRequest": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          }
+        },
+        "required": [
+          "operation_id",
+          "generation",
+          "crypto"
+        ]
+      },
+      "HistoryClearResponse": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "previous_generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "clear_before": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_records": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "operation_id",
+          "previous_generation",
+          "generation",
+          "clear_before",
+          "deleted_records"
+        ]
       }
     }
   }

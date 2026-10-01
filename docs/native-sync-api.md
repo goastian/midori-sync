@@ -47,6 +47,19 @@ Device names are labels, not identity keys. Each redemption receives a new UUID.
 The temporary `/api/ext/pair` routes use the same controller as `/api/v1`.
 Pairing establishes a session; it does not transfer E2EE keys.
 
+For an authenticated web account, open **Dashboard → Connect Midori Desktop**
+or **Devices → Generate pairing code**. The web-only `POST /devices/pairing-code`
+uses the session and CSRF protection to return the same one-use, five-minute
+code without exposing an API bearer token to the page. Enter it in the Sync and
+Link popup in Midori Desktop and select **Connect account**. The page shows a
+countdown and clears the code when it expires. Code generation is limited to
+five requests per minute per account. In local development, `sync:dev pair`
+remains available for the synthetic account when web OAuth is not configured.
+The isolated local launcher also shows **Open local Sync** on its homepage;
+this signs in to its prepared synthetic account and opens the Devices page.
+That entry is only registered in the explicit local/testing launcher and only
+accepts requests from a loopback address.
+
 ### Native account identity
 
 Capabilities include `account_version: 1` and `authentication` with `pairing`,
@@ -77,11 +90,16 @@ returns `409 device_required`; absent or mismatched identity returns
 The migration adds nullable `users.authentik_issuer` without assigning an issuer
 to existing accounts. `AUTHENTIK_ISSUER` must be the exact HTTPS issuer from the
 provider configuration, including its path/trailing slash, without credentials,
-query or fragment. It is distinct from `AUTHENTIK_BASE_URL`. The modern OIDC
-login flow must bind this field only after verifying the identity; that flow
-and migration of unbound production users are still pending. This endpoint is
-an assertion from the authenticated Sync server, not a replacement for OIDC
-token validation or PKCE.
+query or fragment. It is distinct from `AUTHENTIK_BASE_URL`. The web OAuth
+callback binds an unbound account to the configured issuer after obtaining its
+subject from Authentik's userinfo endpoint. It preserves any existing issuer
+binding; accounts with a different binding cannot generate a native web pairing
+code. Authenticated web sessions with no binding are bound when they request a
+code after the server issuer is configured. If `AUTHENTIK_ISSUER` is missing,
+the web code endpoint returns `503 server_issuer_not_configured` and does not
+create a code.
+This endpoint is an assertion from the authenticated Sync server, not a
+replacement for OIDC token validation or PKCE.
 
 Only explicit local/testing mode plus `SYNC_LOCAL_DEV=true` selects
 `urn:midori:sync:local`. `sync:dev prepare` binds the synthetic account to this

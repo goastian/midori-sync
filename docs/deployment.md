@@ -37,6 +37,7 @@ DB_PASSWORD=<strong-random-password>
 AUTHENTIK_CLIENT_ID=<from-authentik>
 AUTHENTIK_CLIENT_SECRET=<from-authentik>
 AUTHENTIK_BASE_URL=https://authentik.yourdomain.com
+AUTHENTIK_ISSUER=https://authentik.yourdomain.com/application/o/<application-slug>/
 AUTHENTIK_REDIRECT_URI=https://sync.yourdomain.com/auth/callback
 
 # Sync settings
@@ -214,6 +215,7 @@ docker compose exec postgres pg_dump -U midori midori_sync > backup.sql
 | `AUTHENTIK_CLIENT_ID` | — | OAuth client ID |
 | `AUTHENTIK_CLIENT_SECRET` | — | OAuth secret |
 | `AUTHENTIK_BASE_URL` | — | Authentik instance URL |
+| `AUTHENTIK_ISSUER` | — | Exact `issuer` from this application's OpenID discovery document; required for native pairing |
 | `SYNC_TOKEN_TTL` | `3600` | Token lifetime in seconds |
 | `SYNC_MAX_RECORD_SIZE` | `262144` | Max record size (256 KB) |
 | `SYNC_DEFAULT_QUOTA` | `104857600` | Default user quota (100 MB) |
