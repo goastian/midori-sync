@@ -12,10 +12,8 @@
 
 - **User data**: bookmarks, history, tabs, browser-settings,
   midori-tab, midori-privacy, and `passwords`. All E2E encrypted.
-- **BIP39 seed phrase (24 words)**: the only preimage capable of
-  deriving the master key. Compromise = total loss of confidentiality.
-- **Master key (M)**: derived from the seed via Argon2id; per-collection
-  subkeys via BLAKE2b (context `MSPv1key`).
+- **Native recovery secret**: protects the V2 key bundle held by the client.
+- **Legacy seed and master key**: needed only while migrating V1 ciphertext.
 - **Sync tokens**: bearer tokens issued by the backend; allow access to
   user ciphertext and metadata (not plaintext data).
 - **Authentik accounts**: user identity; credential rotation is outside
@@ -27,9 +25,9 @@
 |--------------------------------|-------------------------------------------------|--------------------------------------------|
 | Backend operator               | Reads full DB, logs, and filesystem             | E2E: only sees ciphertext + metadata       |
 | Network attacker               | Active MITM if TLS is absent                    | HTTPS + HSTS in production                 |
-| Attacker with device access    | Reads extension `storage.local`                 | Optional local lock with passphrase        |
-| Web attacker (CSRF / XSS)      | Injects JS into dashboard or internal pages     | CSP + Vue escaping + DOM-safe extension    |
-| Malicious extension attacker   | Another extension with similar permissions      | Strict CSP origins + scoped tokens         |
+| Attacker with device access    | Reads local profile and old extension storage   | OS-backed native secret store and profile protection |
+| Web attacker (CSRF / XSS)      | Injects JS into dashboard or internal pages     | CSP + Vue escaping + privileged client boundary |
+| Malicious extension attacker   | Another extension with similar permissions      | Native privileged modules and scoped tokens |
 | Token theft adversary          | Bearer replay until TTL expires                 | DB hashing + TTL + revocation + auditing   |
 | High-compute adversary         | Offline seed brute force                        | Argon2id (ops=3, mem=64MB) + 24 words      |
 
@@ -47,9 +45,8 @@
 Full algorithmic details: [encryption.md](encryption.md).
 Invariant summary:
 
-- **KDF**: Argon2id (`ops=3`, `mem=64 MB`) over the BIP39 seed +
-  bundle-dependent fixed salt, executed in a dedicated Web Worker
-  (`extension/lib/argon2-worker.js`) with synchronous fallback.
+- **Legacy KDF**: Argon2id (`ops=3`, `mem=64 MB`) over the old seed and bundle salt. The retired extension performed it in a worker.
+- **Native V2 KDF**: Argon2id13 with a versioned recovery bundle, implemented in Rust; see [native-sync-api.md](native-sync-api.md).
 - **Per-collection subkeys**: BLAKE2b with context `MSPv1key` and
   `subkey_id = COLLECTION_INDEX[name]`. Indices are stable; changing
   them breaks decryption of existing data.
@@ -70,9 +67,7 @@ The backend NEVER has access to the seed, `M`, subkeys, or plaintext.
 
 ### 3.1 Layers
 
-- **Authentik (OIDC)**: user identity, dashboard login,
-  foundation of the extension OAuth flow (`/api/ext/auth/start`,
-  `/api/ext/auth/poll`).
+- **Authentik (OIDC)**: dashboard identity and the account issuer for native device pairing.
 - **`SyncSession`** (ADR-002): single auth layer for `/api/v1` and
   `/api/ext`. Bearer tokens with configurable TTL (`SYNC_TOKEN_TTL`).
 - **Sanctum**: present as a utility for a future dashboard SPA API.
@@ -84,15 +79,12 @@ The backend NEVER has access to the seed, `M`, subkeys, or plaintext.
   plaintext.
 - TTL: configurable; default 30 days. Hourly cleanup via
   `sync:cleanup-expired`.
-- Individual and bulk-per-user revocation available from the
-  dashboard (`Audit/Index`) and extension (device revoke).
+- Individual and bulk-per-user revocation available from the dashboard; native devices can revoke their sessions.
 - Auditing: IP, truncated User-Agent, `last_used_at`, `last_seen_ip`.
 
 ### 3.3 Manual Pairing
 
-`/api/ext/pair` -> `/api/ext/pair/redeem` using a single-use code,
-short expiration (configurable TTL), and replay protection
-(`PairingFlowTest`).
+The dashboard issues a short-lived, single-use code for the native client via `/devices/pairing-code`; `/api/v1/pair/redeem` consumes it transactionally. Legacy `/api/ext/pair` routes remain temporarily for installed clients.
 
 ---
 
@@ -113,32 +105,13 @@ short expiration (configurable TTL), and replay protection
 > `docker/nginx.conf` (Block 2 / Phase 7). See
 > [plan-status.md](plan-status.md).
 
-### 4.2 CORS (`CorsForExtension`)
+### 4.2 CORS (`SyncApiCors`)
 
 - Config-based whitelisting via `CORS_ALLOWED_ORIGINS`
   (TODO: currently `*`).
 - Preflight: `OPTIONS` responds only with allowed headers.
 - `Origin` echo only if present in the allowlist.
-- Expected origins:
-  `moz-extension://<uuid>`, dashboard domain,
-  `https://accounts.astian.org`.
-
-### 4.3 Extension (CSP in `manifest.json` + meta tags)
-
-```text
-script-src 'self';
-object-src 'self';
-connect-src 'self' http://localhost:8000 https://sync.astian.org https://accounts.astian.org;
-style-src 'self' 'unsafe-inline';
-img-src 'self' data: https:;
-default-src 'self';
-```
-
-`Content-Security-Policy` meta tag replicated in
-`options/options.html`, `popup/popup.html`,
-`setup/setup.html`.
-
----
+- Expected origins: configured dashboard and API clients. Local defaults do not include browser-extension origins.
 
 ## 5. Rate Limiting and Quotas
 
@@ -155,15 +128,14 @@ default-src 'self';
 
 ## 6. Client Storage and Local Lock
 
-- Seed phrase and master key live in `browser.storage.local`. Without
-  local lock they remain in plaintext (mitigation: only accessible by
-  the extension itself; CSP prevents external injection).
-- Optional local lock: the user enables a passphrase; the seed and `M`
-  are removed from `storage.local` and only an encrypted `lockBundle`
-  remains under context `MSPv1lck`.
-- Idle lock: alarm with configurable timeout (default 15 min).
-- Unlock requires Argon2id derivation from the passphrase using the
-  same parameters as the primary KDF.
+Native Desktop stores its account state in the browser profile and keeps
+secrets behind its privileged Sync service; see the native client contract
+and Midori Desktop migration status for the current protection boundary.
+
+Previously installed extension profiles may still hold a seed, master key,
+or encrypted `lockBundle` in `browser.storage.local`. The legacy lock used
+the `MSPv1lck` context and Argon2id. These values must be imported through
+the verified migration path and removed only after a durable checkpoint.
 
 ---
 
@@ -207,5 +179,5 @@ Any change in these areas requires an ADR under `docs/adr/`:
 - KDF, AEAD, payload layout, or `COLLECTION_INDEX`.
 - Auth layer (`SyncSession`, Sanctum, Authentik).
 - CORS / CSP / HSTS / security headers.
-- Extension storage shape (seed, `lockBundle`, `rotationState`).
+- Legacy storage migration (seed, `lockBundle`, `rotationState`).
 - `/api/v1` or `/api/ext` contracts with backward compatibility impact.

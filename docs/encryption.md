@@ -1,7 +1,8 @@
 # Midori Sync — Encryption
 
-This document describes the extension-era format and proposed legacy rotation
-flow. Native V2 uses a versioned JSON envelope and the separate registry defined
+This document describes the retired extension-era format and proposed legacy rotation
+flow. Its source remains available at commit `33690ac8b621980ded566bea370fa1efb37b5300`.
+Native V2 uses a versioned JSON envelope and the separate registry defined
 in [native-sync-api.md](native-sync-api.md). Migration must use the verified
 compatibility fixtures rather than infer guarantees from the older rotation
 description. Encryption of Sync records does not make Link's ordinary searchable
@@ -9,7 +10,7 @@ library end-to-end encrypted.
 
 ## Overview
 
-Midori Sync uses **end-to-end encryption (E2EE)**. The server never has access to plaintext data. All encryption and decryption happens in the browser extension.
+Midori Sync uses **end-to-end encryption (E2EE)**. The server never has access to plaintext Sync records. The legacy format described here was encrypted by the retired extension; native Desktop uses its Rust crypto component.
 
 ## Algorithms
 
@@ -53,10 +54,7 @@ incorrectly. New collections claim a fresh index. Legacy aliases
 (`open-tabs` → 3) reuse an existing index on purpose so that
 already-uploaded ciphertexts remain decryptable.
 
-A guardrail test at `tests/collection-scope.test.js` enforces that the
-backend `CollectionSeeder`, the extension `COLLECTION_INDEX`, and the
-adapter files under `extension/background/collection-adapters/` stay in
-sync.
+The legacy collection indices are retained here for migration. New native collection identifiers are governed by the versioned native contract and its fixtures.
 
 ## Payload Layout
 
@@ -88,8 +86,9 @@ The base64 alphabet is libsodium's `ORIGINAL` variant (RFC 4648 with
   decryption to fail with an error rather than return manipulated
   plaintext.
 
-These invariants are validated by `tests/crypto.test.js` under the
-"roundtrip properties" describe block.
+These are the legacy format invariants that native migration must preserve.
+The retired extension test was removed with the extension runtime; native
+compatibility fixtures and tests must cover these properties before migration.
 
 ## Encryption Flow
 
@@ -131,7 +130,7 @@ To set up a new device the user enters their passphrase:
 
 Argon2id is memory-hard (64 MB) and CPU-bound (`opslimit=3`). To keep
 the background page / service worker responsive, it is executed inside
-a dedicated Web Worker at `extension/lib/argon2-worker.js`. The worker
+a dedicated Web Worker in the retired extension. The worker
 loads its own copy of libsodium so the rest of the extension does not
 need to import the sumo build until it actually performs other crypto
 (lazy-loading objective).
@@ -248,11 +247,7 @@ caller supplies the *current* passphrase and a new passphrase.
 
 ## Client Library
 
-The encryption library is at `extension/lib/midori-sync-crypto.js` and
-depends on `libsodium-wrappers-sumo` (~375 KB; the sumo variant is
-required for Argon2id). The Argon2id worker at
-`extension/lib/argon2-worker.js` loads its own copy of libsodium so the
-extension can avoid pulling sumo into pages that only need messaging.
+The retired extension used libsodium for this format. Native Desktop uses its Rust crypto component; the server and web dashboard no longer carry the extension's JavaScript crypto bundle.
 
 ## Nonce Size
 

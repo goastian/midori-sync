@@ -129,7 +129,6 @@ delimiters; anchored automatically). Example:
 
 ```
 CORS_ALLOWED_ORIGINS=https://dashboard.midori-sync.example
-CORS_ALLOWED_ORIGIN_PATTERNS=^moz-extension://[a-z0-9-]+$,^chrome-extension://[a-z0-9]+$
 ```
 
 Origins outside this list receive no CORS response headers, which

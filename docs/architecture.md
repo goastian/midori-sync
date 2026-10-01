@@ -8,13 +8,13 @@ Midori Sync is a self-hosted, end-to-end encrypted browser synchronization servi
 
 ```
 ┌──────────────────────────┐      ┌──────────────────────────┐
-│   Browser Extension      │      │   Web Dashboard (Vue 3)  │
-│   (Manifest V2/Gecko)    │      │   (Inertia.js + Vite)    │
+│   Midori Desktop         │      │   Web Dashboard (Vue 3)  │
+│   (native Gecko)         │      │   (Inertia.js + Vite)    │
 │                          │      │                          │
 │  ┌────────────────────┐  │      │  ┌────────────────────┐  │
-│  │  Sync Engine       │  │      │  │  Devices / Coll.   │  │
-│  │  Collection Adapt. │  │      │  │  Settings / Quota   │  │
-│  │  Crypto Library    │  │      │  │                    │  │
+│  │  Sync / Link       │  │      │  │  Devices / Coll.   │  │
+│  │  Places / Logins   │  │      │  │  Settings / Quota   │  │
+│  │  Rust Crypto       │  │      │  │                    │  │
 │  └────────┬───────────┘  │      │  └────────┬───────────┘  │
 └───────────┼──────────────┘      └───────────┼──────────────┘
             │ HTTPS (REST API)                │ HTTPS (Inertia)
@@ -55,30 +55,26 @@ Midori Sync is a self-hosted, end-to-end encrypted browser synchronization servi
 | Auth | Authentik (OAuth2/OIDC via Socialite) |
 | Encryption | XChaCha20-Poly1305 (libsodium) |
 | KDF | Argon2id (3 ops, 64 MB) |
-| Extension | Manifest V2 (Firefox/Gecko) |
+| Desktop client | Native Gecko JavaScript, C++, and Rust |
 | Container | Docker (multi-stage build) |
 | Process Manager | Supervisord (PHP-FPM + Nginx + Queue + Scheduler) |
 
 ## Data Flow
 
 ### Sync Upload (Client → Server)
-1. Extension adapter collects local data (e.g., bookmarks)
-2. Data serialized to JSON
-3. Encrypted with collection-specific sub-key (XChaCha20-Poly1305)
-4. Sent as base64 payload via `PUT /api/v1/collections/{name}/{id}`
-5. Server stores encrypted blob with version and timestamp
-6. Server updates collection stats (record count, size)
+1. Native adapters read Places, Login Manager, and Midori preferences.
+2. The client encrypts versioned records with Rust before transport.
+3. The client writes to `/api/v1/sync/changes` with conditional revisions and operation IDs.
+4. Laravel commits records and journal events in one PostgreSQL transaction.
 
 ### Sync Download (Server → Client)
-1. Extension requests delta: `GET /api/v1/collections/{name}?since={timestamp}`
-2. Server returns records modified after `since`
-3. Client decrypts each record's payload
-4. Collection adapter applies changes to browser API
+1. The native client requests a consistent bootstrap or a paged journal delta.
+2. Rust authenticates and decrypts each record locally.
+3. Native adapters apply accepted changes through Places and Login Manager.
 
 ### Conflict Resolution
-- **Strategy**: Last-Writer-Wins with microsecond timestamps
-- **Conditional writes**: `X-If-Unmodified-Since` header → HTTP 412 on conflict
-- **Batch operations**: Each record gets a unique timestamp (offset by 0.000001s)
+- Native writes use revisions and operation IDs; conflicts remain explicit in the client journal.
+- The legacy timestamp API remains available only during the migration window.
 
 ## Directory Structure
 
@@ -95,15 +91,10 @@ midori-sync/
 │   ├── Models/                  # Eloquent models (7 models)
 │   └── Services/                # SyncAuthService, SyncStorageService
 ├── database/migrations/         # 8 migration files
-├── extension/                   # Browser extension (Manifest V2)
-│   ├── background/              # Sync engine + collection adapters
-│   ├── lib/                     # Crypto library (libsodium)
-│   ├── popup/                   # Browser action popup
-│   └── options/                 # Extension settings page
 ├── resources/js/                # Vue 3 frontend
 │   ├── Layouts/                 # AppLayout.vue
 │   └── Pages/                   # Dashboard, Devices, Collections, Settings
 ├── routes/                      # web.php, api.php, console.php
 ├── docker/                      # nginx, php.ini, supervisord configs
-└── tests/                       # PHPUnit + Vitest
+└── tests/                       # PHPUnit
 ```

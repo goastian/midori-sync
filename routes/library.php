@@ -8,7 +8,7 @@ use App\Http\Controllers\Api\V1\Library\SaveController;
 use App\Http\Controllers\Api\V1\Library\ShareController;
 use App\Http\Controllers\Api\V1\Library\TagController;
 use App\Http\Middleware\CheckLibraryEntitlement;
-use App\Http\Middleware\CorsForExtension;
+use App\Http\Middleware\SyncApiCors;
 use App\Http\Middleware\TrackDevice;
 use App\Http\Middleware\ValidateSyncToken;
 use Illuminate\Support\Facades\Route;
@@ -20,7 +20,7 @@ Route::get('/library/s/{token}', [ShareController::class, 'public']);
 Route::post('/library/billing/webhook', [BillingController::class, 'webhook'])
     ->middleware('throttle:sync-unauth');
 
-Route::prefix('library')->middleware([CorsForExtension::class, ValidateSyncToken::class, TrackDevice::class])->group(function () {
+Route::prefix('library')->middleware([SyncApiCors::class, ValidateSyncToken::class, TrackDevice::class])->group(function () {
     Route::get('/entitlement', [BillingController::class, 'entitlement']);
     Route::get('/upgrade', [BillingController::class, 'upgrade']);
 

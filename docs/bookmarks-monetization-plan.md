@@ -1,6 +1,6 @@
 # Integrated Plan — Midori Library as a Standalone Service + Billing on payments.astian.org
 
-> Revision 2 — separate service. Decision: **sync = free with a generous quota, library = separate service and the only paywalled surface**. Billing lives only on `payments.astian.org`. This repo (`midori-sync`) never touches Stripe or cards.
+> Historical proposal. The current Link service is implemented in this repository; see `docs/native-link-api.md` and the Midori Desktop native integration plan for the active architecture. The extension runtime described below has been removed.
 
 ## 1. Target topology
 

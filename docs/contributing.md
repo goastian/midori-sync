@@ -22,7 +22,7 @@ or security vulnerabilities: see `SECURITY.md` at the repository root.
 - Composer 2
 - Node.js 20+
 - Docker + Docker Compose (recommended for PostgreSQL 17 + Redis 7)
-- Firefox or Midori Browser to test the extension
+- A Midori Desktop build for native browser integration tests
 
 ### Bootstrap
 
@@ -39,7 +39,7 @@ php artisan serve
 npm run dev                 # Vite + Inertia HMR
 ```
 
-For the extension see [extension-dev.md](extension-dev.md).
+The native client lives in the Midori Desktop repository under `src/browser/components/sync/` and `src/toolkit/components/midori-sync/`.
 
 ---
 
@@ -61,22 +61,17 @@ For the extension see [extension-dev.md](extension-dev.md).
 
 ### JavaScript / Vue
 
-- ES modules in `resources/js/`, classic scripts in `extension/`
-  (MV2 manifest). Do not mix them.
+- ES modules in `resources/js/` serve the web dashboard; privileged browser modules live in Midori Desktop.
 - Vue 3 Composition API + `<script setup>`. Inertia for navigation.
 - Tailwind for styling. Dark mode via the `dark:` class and the
   `useTheme` composable.
-- In the extension: NO `innerHTML` with server-controlled strings. Use
-  `textContent` and the DOM API.
 
 ### Crypto
 
-- Any change to `extension/lib/midori-sync-crypto.js`,
-  `COLLECTION_INDEX`, or payload layout requires:
+- Any change to the native Rust crypto format or payload layout requires:
   1. ADR in `docs/adr/`.
   2. Update to [docs/encryption.md](encryption.md).
-  3. Tests in `tests/crypto.test.js`
-     (including property tests).
+  3. Rust and native client compatibility tests.
   4. Migration plan for existing data if compatibility is broken.
 
 ---
@@ -88,15 +83,12 @@ For the extension see [extension-dev.md](extension-dev.md).
 composer test
 php artisan test --testsuite=Feature
 
-# JS (includes extension/tests/)
-npm test
-
-# Interactive Vitest
-npx vitest
+# Web dashboard build
+npm run build
 
 # Specific test
 php artisan test --filter=SyncAuthServiceTest
-npx vitest run tests/crypto.test.js
+npm run build
 ```
 
 ### When to Add Tests
@@ -104,11 +96,8 @@ npx vitest run tests/crypto.test.js
 - New endpoint: Feature test under `tests/Feature/`.
 - New service: unit test under `tests/Unit/` + Feature integration test
   if DB interaction exists.
-- Extension adapter: test in
-  `extension/tests/adapters.test.js`.
-- Background handler: test in
-  `extension/tests/sync-engine.test.js`.
-- Crypto change: test in `tests/crypto.test.js` with property tests.
+- Native adapter or background handler: test in Midori Desktop's Gecko suite.
+- Crypto change: test the Rust core and cross-language fixtures.
 
 ### Policy
 
@@ -131,7 +120,7 @@ document in the same PR:
 | Protocol contract / breaking change            | `docs/protocol.md` + ADR in `docs/adr/` |
 | Algorithm / KDF / payload layout               | `docs/encryption.md`                    |
 | DB migration with operational impact           | `docs/deployment.md`                    |
-| Adapters / handlers / storage shape            | `docs/extension-dev.md`                 |
+| Native adapters / client storage shape         | Midori Desktop `docs/estado-integracion-sync-link-nativo.md` |
 | Threat model, headers, CORS, CSP               | `docs/security.md`                      |
 | User-visible or operator-visible changes       | `CHANGELOG.md`                          |
 
@@ -149,7 +138,7 @@ use incremental numbering.
    `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`,
    `perf:`, `security:`.
 3. Before pushing:
-   `composer test`, `npm test`, `composer audit`,
+   `composer test`, `npm run build`, `composer audit`,
    `npm audit`, lint.
 4. PR description must include:
    - What changes and why.
@@ -189,7 +178,7 @@ use incremental numbering.
 ## Compatibility
 
 - [ ] Does not break public API
-- [ ] Does not change extension storage shape
+- [ ] Preserves or explicitly migrates legacy extension data
 - [ ] Does not require manual migration
 
 ## Docs
@@ -200,6 +189,6 @@ use incremental numbering.
 ## Tests
 
 - [ ] composer test passing
-- [ ] npm test passing
+- [ ] npm run build passing
 - [ ] Added tests for the change
 ```

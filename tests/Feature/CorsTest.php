@@ -8,7 +8,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 /**
- * Verifies CorsForExtension echoes only allow-listed origins and
+ * Verifies SyncApiCors echoes only allow-listed origins and
  * preflights short-circuit cleanly.
  */
 class CorsTest extends TestCase
@@ -24,7 +24,7 @@ class CorsTest extends TestCase
             'https://dashboard.example.com',
         ]);
         config()->set('cors.allowed_origin_patterns', [
-            '^moz-extension://[a-z0-9-]+$',
+            '^https://client-[a-z0-9]+\.example\.com$',
         ]);
     }
 
@@ -51,12 +51,12 @@ class CorsTest extends TestCase
         $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
 
         $response = $this->withToken($token)
-            ->withHeaders(['Origin' => 'moz-extension://abc-123-def'])
+            ->withHeaders(['Origin' => 'https://client-abc123.example.com'])
             ->getJson('/api/v1/sync/info');
 
         $response->assertOk();
         $this->assertSame(
-            'moz-extension://abc-123-def',
+            'https://client-abc123.example.com',
             $response->headers->get('Access-Control-Allow-Origin')
         );
     }

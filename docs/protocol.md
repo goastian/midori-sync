@@ -52,7 +52,7 @@ It is maintained during migration because:
    current activation rejects populated legacy accounts. No new extension
    runtime or `/api/ext/v2` is introduced for the native client.
 5. **Shared middleware.** Both surfaces use `ValidateSyncToken`,
-   `TrackDevice` and `CorsForExtension` where applicable. Quotas are enforced
+   `TrackDevice` and `SyncApiCors` where applicable. Quotas are enforced
    by `SyncStorageService` and `SyncQuota` under the same account lock and
    transaction as the write, using replacement bytes rather than HTTP body size.
 6. **One change journal.** Both legacy and native writes append immutable
@@ -117,8 +117,8 @@ both.
 3. Existing clients have migrated or been explicitly revoked, and the
    announced compatibility window has ended.
 
-The extension runtime, packaging and exclusive dependencies are removed after
-the native migration is validated. A permanent MV3 extension is not required.
+The extension runtime, packaging and exclusive dependencies have been removed.
+A permanent MV3 extension is not required.
 Removing the client source and retiring the legacy server adapter are separate
 milestones; the latter does not justify keeping a redundant runtime.
 

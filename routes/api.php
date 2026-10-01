@@ -13,7 +13,7 @@ use App\Http\Controllers\Api\V1\PairingController;
 use App\Http\Controllers\Api\V1\RefreshSessionController;
 use App\Http\Controllers\Api\V1\SyncChangesController;
 use App\Http\Controllers\Api\V1\SyncInfoController;
-use App\Http\Middleware\CorsForExtension;
+use App\Http\Middleware\SyncApiCors;
 use App\Http\Middleware\TrackDevice;
 use App\Http\Middleware\ValidateSyncToken;
 use Illuminate\Http\Request;
@@ -24,9 +24,9 @@ require __DIR__.'/library.php';
 
 // ─── Extension API ──────────────────────────────────────────────────────
 // Dedicated endpoints for the browser extension with simplified data formats.
-Route::prefix('ext')->middleware(CorsForExtension::class)->group(function () {
+Route::prefix('ext')->middleware(SyncApiCors::class)->group(function () {
 
-    // Catch-all OPTIONS so preflights hit `CorsForExtension` even when
+    // Catch-all OPTIONS so preflights hit `SyncApiCors` even when
     // the path matches no GET/POST/... route. Laravel/Symfony otherwise
     // auto-respond with 200+Allow and bypass route middleware.
     Route::options('{any}', fn () => response('', 204))->where('any', '.*');
@@ -84,9 +84,9 @@ Route::prefix('ext')->middleware(CorsForExtension::class)->group(function () {
 });
 
 // ─── API v1 — Midori Sync Protocol ─────────────────────────────────────
-Route::prefix('v1')->middleware(CorsForExtension::class)->group(function () {
+Route::prefix('v1')->middleware(SyncApiCors::class)->group(function () {
 
-    // Catch-all OPTIONS so preflights hit `CorsForExtension`.
+    // Catch-all OPTIONS so preflights hit `SyncApiCors`.
     Route::options('{any}', fn () => response('', 204))->where('any', '.*');
 
     // Auth: exchange OAuth token for sync session token

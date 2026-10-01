@@ -317,7 +317,7 @@ php artisan sync:recalculate-usage
 
 # Tests
 composer test
-npm test
+npm run build
 
 # Tinker (ad-hoc admin)
 php artisan tinker
