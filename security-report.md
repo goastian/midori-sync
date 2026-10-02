@@ -8,11 +8,10 @@
 
 ## Resumen Ejecutivo
 
-| Severidad | Confirmados | Falsos Positivos |
-|-----------|-------------|------------------|
-| HIGH      | 1           | —                |
-| MEDIUM    | 2           | 1                |
-| LOW       | —           | 3                |
+| Severidad | Confirmados |
+|-----------|-------------|
+| HIGH      | 1           |
+| MEDIUM    | 2           |
 
 ---
 
@@ -99,18 +98,6 @@ const sanitize = (html) => DOMPurify.sanitize(html, { ALLOWED_TAGS: [] });
 ```vue
 <button v-html="sanitize(link.label)" />
 ```
-
----
-
-## Falsos Positivos Documentados
-
-| ID    | Archivo                                  | Hallazgo reportado                     | Motivo de descarte                                                                                                                            |
-|-------|------------------------------------------|----------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
-| FP-01 | `extension/popup/popup.js:27`            | DOM XSS via `appendChild`              | El nodo se crea con `document.createElement` y el contenido se asigna con `textContent`, no `innerHTML`. Sin riesgo de XSS.                   |
-| FP-02 | `extension/lib/argon2-worker.js:31`      | `postMessage` sin validación de origen | Es un Worker interno de la extensión. Los Workers solo reciben mensajes del script que los instanció; páginas externas no pueden contactarlos. |
-| FP-03 | `extension/lib/midori-sync-crypto.js:82` | `postMessage` sin validación de origen | Es el padre escuchando respuestas del Worker (`worker.addEventListener`), no una superficie de ataque externa.                                 |
-| FP-04 | `extension/lib/sodium.js:2`              | API key detectada                      | Nombre de función de la API de libsodium (`crypto_aead_aegis128l_keygen`). No es un secreto.                                                  |
-| FP-05 | `extension/options/options.js:213`       | API key detectada                      | Variable de UI que muestra la clave de cifrado al propio usuario en la página de opciones. Comportamiento esperado por diseño.                 |
 
 ---
 
