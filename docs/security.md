@@ -54,10 +54,10 @@ Invariant summary:
   `base64(nonce(24) || ciphertext || tag(16))`.
 - **Local lock**: `M` bundle encrypted with passphrase via Argon2id +
   KDF context `MSPv1lck` (distinct from `MSPv1key`).
-- **Master key rotation**: incremental, resumable cursor-based rotation
-  with fallback decryption to `M_old` during mixed states. Procedure
-  documented in [encryption.md](encryption.md) and
-  [runbooks.md](runbooks.md).
+- **Legacy master key rotation**: the retired client used an incremental,
+  resumable cursor and fallback decryption to `M_old`. Its format is
+  documented for migration in [encryption.md](encryption.md). Native key
+  rotation is specified separately in [native-sync-api.md](native-sync-api.md).
 
 The backend NEVER has access to the seed, `M`, subkeys, or plaintext.
 
@@ -68,8 +68,8 @@ The backend NEVER has access to the seed, `M`, subkeys, or plaintext.
 ### 3.1 Layers
 
 - **Authentik (OIDC)**: dashboard identity and the account issuer for native device pairing.
-- **`SyncSession`** (ADR-002): single auth layer for `/api/v1` and
-  `/api/ext`. Bearer tokens with configurable TTL (`SYNC_TOKEN_TTL`).
+- **`SyncSession`** (ADR-002): auth layer for `/api/v1`. Bearer tokens
+  have configurable TTL (`SYNC_TOKEN_TTL`).
 - **Sanctum**: present as a utility for a future dashboard SPA API.
   NOT used for sync.
 
@@ -84,7 +84,7 @@ The backend NEVER has access to the seed, `M`, subkeys, or plaintext.
 
 ### 3.3 Manual Pairing
 
-The dashboard issues a short-lived, single-use code for the native client via `/devices/pairing-code`; `/api/v1/pair/redeem` consumes it transactionally. Legacy `/api/ext/pair` routes remain temporarily for installed clients.
+The dashboard issues a short-lived, single-use code for the native client via `/devices/pairing-code`; `/api/v1/pair/redeem` consumes it transactionally.
 
 ---
 
@@ -112,6 +112,16 @@ The dashboard issues a short-lived, single-use code for the native client via `/
 - Preflight: `OPTIONS` responds only with allowed headers.
 - `Origin` echo only if present in the allowlist.
 - Expected origins: configured dashboard and API clients. Local defaults do not include browser-extension origins.
+
+### 4.3 Link fetches
+
+Metadata and HTML snapshot jobs use `PublicPageFetcher`: only HTTP(S) targets
+without URL credentials on standard ports are accepted. Each redirect is
+rechecked, DNS A/AAAA answers must all be public, and curl pins one validated
+address without an ambient proxy. The decompressed response is bounded while
+streaming (5 MiB for metadata, 8 MiB for HTML snapshots). Stored snapshots are
+sanitized before use. These controls do not cover future Chromium-based PDF or
+screenshot workers; those need their own network isolation.
 
 ## 5. Rate Limiting and Quotas
 
@@ -180,4 +190,4 @@ Any change in these areas requires an ADR under `docs/adr/`:
 - Auth layer (`SyncSession`, Sanctum, Authentik).
 - CORS / CSP / HSTS / security headers.
 - Legacy storage migration (seed, `lockBundle`, `rotationState`).
-- `/api/v1` or `/api/ext` contracts with backward compatibility impact.
+- `/api/v1` contracts with backward compatibility impact.
