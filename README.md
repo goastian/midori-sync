@@ -1,20 +1,19 @@
 # Midori Sync
 
-Self-hosted synchronization service for Midori and Firefox with end-to-end encryption, a Laravel backend, a browser extension, and a web dashboard to inspect devices, collections, and storage usage.
+Self-hosted synchronization and Link service for Midori Desktop, with end-to-end encrypted Sync records, a Laravel backend, and a web dashboard.
 
 ## Current Status
 
 The repository already has a functional and usable foundation:
 
-- Laravel 13 backend with `v1` sync API and `ext` API for the extension.
-- Web and extension authentication via Authentik using Socialite.
+- Laravel 13 backend with the native `v1` Sync API.
+- Web authentication via Authentik using Socialite and native device pairing.
 - PostgreSQL persistence with Redis for cache/session/queue in Docker deployments.
-- Extension with popup, options, setup, crypto library with libsodium, and adapters for multiple collections.
+- Midori Desktop owns the native popup, browser data adapters, background scheduler, and Rust/C++ cryptography.
 - Web dashboard with pages for dashboard, devices, collections, and settings.
 
 There is also clear technical debt:
 
-- There are two API surfaces (`/api/ext` and `/api/v1`) with overlapping logic.
 - The collection seeder does not fully match the original project scope.
 - Test coverage and development documentation are still partial.
 
@@ -30,14 +29,6 @@ The updated status details and execution plan live in `docs/plan-status.md`.
 - Middleware for quota checks, device tracking, CORS, and token validation
 - Scheduled commands for TTL cleanup and usage recalculation
 
-### Extension
-
-- Manifest V2 for Gecko/Firefox
-- Popup for login, sync status, and manual actions
-- Options page for server settings, collections, and seed phrase
-- Setup page to generate or recover the seed phrase
-- `midori-sync-crypto.js` library with Argon2id + XChaCha20-Poly1305
-
 ### Web dashboard
 
 - Dashboard with basic metrics and recent activity
@@ -52,18 +43,19 @@ app/
   Console/Commands/        Scheduled commands
   Http/Controllers/        API, auth, and web controllers
   Http/Middleware/         Token, quota, CORS, tracking
-  Http/Requests/           API v1 and ext Form Requests
+  Http/Requests/           API v1 Form Requests
   Models/                  User, Device, Record, SyncSession, etc.
   Services/                Core auth and storage logic
 database/
   migrations/              Main sync schema
   seeders/                 Collection seeder
 docs/                      API, architecture, encryption, deployment, plan
-extension/                 Browser extension
 resources/js/              Frontend Vue 3 + Inertia
 routes/                    web.php, api.php, console.php
-tests/                     PHPUnit y Vitest
+tests/                     PHPUnit
 ```
+
+The former extension source is available in historical commit `33690ac8b621980ded566bea370fa1efb37b5300`. New Desktop builds do not package the extension, and the server exposes only the native API. Existing profiles still require the native data migration described below.
 
 ## Requirements
 
@@ -75,7 +67,7 @@ tests/                     PHPUnit y Vitest
 
 ### For Local Development
 
-- PHP 8.3+
+- PHP 8.3+ with curl, intl, sodium and PostgreSQL extensions
 - Composer 2+
 - Node.js 20+
 - PostgreSQL 17+
@@ -133,6 +125,7 @@ REDIS_PORT=6379
 AUTHENTIK_CLIENT_ID=
 AUTHENTIK_CLIENT_SECRET=
 AUTHENTIK_BASE_URL=https://auth.example.com
+AUTHENTIK_ISSUER=https://auth.example.com/application/o/<application-slug>/
 AUTHENTIK_REDIRECT_URI=${APP_URL}/auth/callback
 
 SYNC_TOKEN_TTL=3600
@@ -147,8 +140,8 @@ SYNC_RATE_LIMIT=60
 # backend tests
 composer test
 
-# current JS tests
-npx vitest run tests/crypto.test.js
+# dashboard production build
+npm run build
 
 # cleanup TTL records and expired sessions
 php artisan sync:cleanup-expired
@@ -170,10 +163,9 @@ php artisan sync:recalculate-usage --user=1
 
 ## Known Limitations
 
-- The extension is still not consolidated around a single sync engine.
-- Tests are still missing for adapters, middleware, `SyncAuthService`, and E2E flows.
-- Operational docs such as `protocol.md`, `extension-dev.md`, and `contributing.md` are still missing.
-- The dashboard still does not include an activity chart or device rename flow.
+- Existing profiles and server records from the retired extension still need a verified native migration path.
+- Former extension clients cannot connect to this server after the removal of their API routes.
+- Native OAuth/PKCE, broader multiplatform testing, and full Link library management remain in progress.
 
 ## License
 
