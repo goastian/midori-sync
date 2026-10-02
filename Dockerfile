@@ -24,9 +24,11 @@ RUN apk add --no-cache \
     supervisor \
     libsodium-dev \
     libpq-dev \
+    curl-dev \
     icu-dev \
     && docker-php-ext-install \
     pdo_pgsql \
+    curl \
     sodium \
     intl \
     opcache \
