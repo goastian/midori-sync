@@ -4,18 +4,15 @@
     "type": "module",
     "scripts": {
         "build": "vite build",
-        "dev": "vite",
-        "test": "vitest run"
+        "dev": "vite"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.2.2",
         "axios": ">=1.11.0 <=1.14.1",
         "concurrently": "^9.0.1",
         "laravel-vite-plugin": "^3.0.0",
-        "libsodium-wrappers-sumo": "^0.8.3",
         "tailwindcss": "^4.2.2",
-        "vite": "^8.0.0",
-        "vitest": "^4.1.4"
+        "vite": "^8.0.0"
     },
     "dependencies": {
         "@inertiajs/vue3": "^3.0.3",
