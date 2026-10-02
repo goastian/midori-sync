@@ -6,12 +6,13 @@ use App\Models\Device;
 use App\Models\SyncSession;
 use App\Models\User;
 use App\Services\SyncAuthService;
+use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 /**
  * Covers App\Http\Middleware\TrackDevice. The middleware is attached to
- * both /api/v1 and /api/ext authenticated groups, so we exercise it
+ * the /api/v1 authenticated group, so we exercise it
  * through real routed requests rather than unit-testing it in isolation.
  */
 class TrackDeviceTest extends TestCase
@@ -19,13 +20,15 @@ class TrackDeviceTest extends TestCase
     use RefreshDatabase;
 
     private User $user;
+
     private string $token;
+
     private Device $device;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(\Database\Seeders\CollectionSeeder::class);
+        $this->seed(CollectionSeeder::class);
 
         $this->user = User::factory()->create(['storage_quota_bytes' => 104857600]);
         $this->device = Device::create([
@@ -48,7 +51,7 @@ class TrackDeviceTest extends TestCase
         $this->device->forceFill(['last_sync_at' => null])->save();
 
         $this->withToken($this->token)
-            ->getJson('/api/v1/sync/info')
+            ->getJson('/api/v1/devices')
             ->assertOk();
 
         $this->device->refresh();
@@ -61,7 +64,7 @@ class TrackDeviceTest extends TestCase
         $session->forceFill(['last_used_at' => null])->save();
 
         $this->withToken($this->token)
-            ->getJson('/api/v1/sync/info')
+            ->getJson('/api/v1/devices')
             ->assertOk();
 
         $session->refresh();
@@ -74,7 +77,7 @@ class TrackDeviceTest extends TestCase
         // should never touch the device/session rows.
         $before = $this->device->last_sync_at;
 
-        $this->getJson('/api/v1/sync/info')->assertUnauthorized();
+        $this->getJson('/api/v1/devices')->assertUnauthorized();
 
         $this->device->refresh();
         $this->assertEquals($before, $this->device->last_sync_at);

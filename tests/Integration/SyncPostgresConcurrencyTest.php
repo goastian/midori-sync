@@ -12,7 +12,6 @@ use App\Models\User;
 use App\Services\Library\LinkWriter;
 use App\Services\SyncAuthService;
 use App\Services\SyncIdentityService;
-use App\Services\SyncKeyBundleService;
 use App\Services\SyncNativeCryptoService;
 use App\Services\SyncRefreshService;
 use App\Services\SyncStorageService;
@@ -304,71 +303,6 @@ class SyncPostgresConcurrencyTest extends TestCase
             $events = DB::table('library_link_changes')->where('user_id', $user->id)->orderBy('sequence')->get();
             $this->assertSame($rollback ? [1] : [1, 2], $events->pluck('sequence')->map(fn ($value) => (int) $value)->all());
             $this->assertSame($rollback ? [$result['id']] : [$first->id, $result['id']], $events->pluck('link_id')->all());
-        } finally {
-            while (DB::transactionLevel() > 0) {
-                DB::rollBack();
-            }
-            fclose($sockets[0]);
-            if ($child !== null) {
-                posix_kill($child, SIGTERM);
-                pcntl_waitpid($child, $status);
-            }
-        }
-    }
-
-    public function test_key_bundle_compare_and_swap_waits_for_the_competing_creation(): void
-    {
-        $user = User::factory()->create();
-        $keys = app(SyncKeyBundleService::class);
-        $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
-        $this->assertNotFalse($sockets);
-        DB::disconnect();
-        $child = pcntl_fork();
-        $this->assertNotSame(-1, $child);
-
-        if ($child === 0) {
-            fclose($sockets[0]);
-            try {
-                stream_set_timeout($sockets[1], 10);
-                if (trim((string) fgets($sockets[1])) !== 'go') {
-                    exit(2);
-                }
-                DB::statement("SET statement_timeout = '8s'");
-                fwrite($sockets[1], json_encode(['pid' => DB::selectOne('SELECT pg_backend_pid() AS pid')->pid])."\n");
-                try {
-                    $keys->store($user->id, 'second writer', 0);
-                    $result = ['status' => 'overwritten'];
-                } catch (SyncProtocolException $error) {
-                    $result = ['status' => $error->status, 'error' => $error->error];
-                }
-                fwrite($sockets[1], json_encode($result, JSON_THROW_ON_ERROR)."\n");
-                DB::disconnect();
-                fclose($sockets[1]);
-                exit(0);
-            } catch (\Throwable $error) {
-                fwrite($sockets[1], json_encode(['error' => $error->getMessage()])."\n");
-                exit(1);
-            }
-        }
-
-        fclose($sockets[1]);
-        stream_set_timeout($sockets[0], 10);
-        try {
-            DB::beginTransaction();
-            $this->assertSame(1, $keys->store($user->id, 'first writer', 0)->version);
-            fwrite($sockets[0], "go\n");
-            $ready = json_decode((string) fgets($sockets[0]), true, flags: JSON_THROW_ON_ERROR);
-            $this->assertArrayHasKey('pid', $ready);
-            $this->assertTrue($this->waitForDatabaseLock($ready['pid']));
-            DB::commit();
-            $result = json_decode((string) fgets($sockets[0]), true, flags: JSON_THROW_ON_ERROR);
-            pcntl_waitpid($child, $status);
-            $child = null;
-            $this->assertTrue(pcntl_wifexited($status));
-            $this->assertSame(0, pcntl_wexitstatus($status), json_encode($result));
-            $this->assertSame(['status' => 409, 'error' => 'key_version_conflict'], $result);
-            $this->assertDatabaseCount('crypto_key_bundles', 1);
-            $this->assertDatabaseHas('crypto_key_bundles', ['user_id' => $user->id, 'encrypted_bundle' => 'first writer', 'version' => 1]);
         } finally {
             while (DB::transactionLevel() > 0) {
                 DB::rollBack();

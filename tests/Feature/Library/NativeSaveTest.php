@@ -6,6 +6,7 @@ use App\Jobs\Library\FetchLinkMetadata;
 use App\Models\Library\LibraryCollection;
 use App\Models\Library\LibraryLink;
 use App\Models\User;
+use App\Services\Library\LinkMutationService;
 use App\Services\Library\LinkWriter;
 use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -34,18 +35,21 @@ class NativeSaveTest extends TestCase
     public function test_replay_returns_the_original_small_receipt_after_edit_and_deletion(): void
     {
         $data = ['operation_id' => (string) Str::uuid(), 'url' => 'https://93.184.216.34/article', 'title' => 'Original', 'tags' => ['Two', 'one']];
-        $first = $this->withToken($this->token)->postJson('/api/library/v1/saves', $data)->assertCreated()
-            ->assertExactJson(['version' => 1, 'operation_id' => $data['operation_id'], 'link_id' => LibraryLink::sole()->id, 'created' => true]);
+        $first = $this->withToken($this->token)->postJson('/api/library/v1/saves?receipt_version=2', $data)->assertCreated()
+            ->assertExactJson(['version' => 1, 'operation_id' => $data['operation_id'], 'link_id' => LibraryLink::sole()->id,
+                'created' => true, 'revision' => (string) LibraryLink::sole()->revision]);
         $this->assertStringContainsString('no-store', $first->headers->get('Cache-Control'));
         $link = LibraryLink::sole();
         $link->update(['title' => 'Changed elsewhere', 'readability_html' => str_repeat('x', 100000)]);
         $reordered = array_replace($data, ['tags' => ['one', 'two', 'ONE'], 'operation_id' => strtoupper($data['operation_id'])]);
-        $this->withToken($this->token)->postJson('/api/library/v1/saves', $reordered)->assertCreated()->assertExactJson($first->json());
+        $this->withToken($this->token)->postJson('/api/library/v1/saves?receipt_version=2', $reordered)->assertCreated()->assertExactJson($first->json());
         $this->assertSame('Changed elsewhere', $link->fresh()->title);
         $link->delete();
-        $this->withToken($this->token)->postJson('/api/library/v1/saves', $data)->assertCreated()->assertExactJson($first->json());
+        $this->withToken($this->token)->postJson('/api/library/v1/saves?receipt_version=2', $data)->assertCreated()->assertExactJson($first->json());
         $link->forceDelete();
-        $this->withToken($this->token)->postJson('/api/library/v1/saves', $data)->assertCreated()->assertExactJson($first->json());
+        $this->withToken($this->token)->postJson('/api/library/v1/saves?receipt_version=2', $data)->assertCreated()->assertExactJson($first->json());
+        $this->withToken($this->token)->postJson('/api/library/v1/saves', $data)->assertCreated()
+            ->assertExactJson(collect($first->json())->except('revision')->all());
         $this->assertDatabaseCount('library_links', 0);
         $this->assertDatabaseCount('library_save_receipts', 1);
         $this->assertLessThan(256, strlen($first->getContent()));
@@ -64,6 +68,18 @@ class NativeSaveTest extends TestCase
         $this->assertDatabaseCount('library_tags', 0);
         $this->assertDatabaseHas('library_links', ['id' => $first->json('link_id'), 'title' => 'Keep']);
         Bus::assertDispatchedTimes(FetchLinkMetadata::class, 1);
+    }
+
+    public function test_a_receipt_created_before_revision_tracking_keeps_its_original_shape(): void
+    {
+        $data = ['operation_id' => (string) Str::uuid(), 'url' => 'https://93.184.216.34/older'];
+        $original = $this->withToken($this->token)->postJson('/api/library/v1/saves', $data)
+            ->assertCreated()->json();
+        DB::table('library_save_receipts')->where('operation_id', $data['operation_id'])
+            ->update(['revision' => null]);
+
+        $this->withToken($this->token)->postJson('/api/library/v1/saves?receipt_version=2', $data)
+            ->assertCreated()->assertExactJson($original);
     }
 
     public function test_canonical_duplicates_have_distinct_receipts_without_overwriting_existing_data(): void
@@ -144,7 +160,7 @@ class NativeSaveTest extends TestCase
         Bus::assertNothingDispatched();
     }
 
-    public function test_capabilities_advertise_only_the_available_link_save_contract(): void
+    public function test_capabilities_advertise_available_link_contracts(): void
     {
         $this->getJson('/api/v1/capabilities')->assertOk()->assertJsonPath('native_ready', false)
             ->assertJsonPath('link', [
@@ -152,6 +168,8 @@ class NativeSaveTest extends TestCase
                 'save_receipts_per_account' => LinkWriter::MAX_SAVE_RECEIPTS,
                 'browse_version' => 1, 'browse_page_limit' => 50,
                 'feed_version' => 1, 'feed_page_limit' => 50, 'feed_page_bytes' => 524288,
+                'mutation_version' => 1, 'mutation_request_bytes' => LinkMutationService::MAX_REQUEST_BYTES,
+                'mutation_receipts_per_account' => LinkMutationService::MAX_RECEIPTS,
             ]);
     }
 

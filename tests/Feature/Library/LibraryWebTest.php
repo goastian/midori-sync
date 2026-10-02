@@ -3,12 +3,16 @@
 namespace Tests\Feature\Library;
 
 use App\Jobs\Library\FetchLinkMetadata;
+use App\Jobs\Library\SnapshotPage;
 use App\Models\Library\LibraryLink;
+use App\Models\Library\LibrarySnapshot;
 use App\Models\User;
 use App\Services\Library\MetadataExtractor;
+use App\Services\Library\PublicPageFetcher;
 use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class LibraryWebTest extends TestCase
@@ -20,11 +24,18 @@ class LibraryWebTest extends TestCase
         config(['library.fetch_enabled' => true]);
         $user = User::factory()->create();
         $this->actingAs($user);
-        Http::fake([
-            '*' => Http::response(
-                '<html><head><title>Fake Title</title><meta name="description" content="Fake desc"></head>'
-                .'<body><article><h1>Hola</h1><p>'.str_repeat('palabra ', 80).'</p></article></body></html>', 200, ['Content-Type' => 'text/html']),
-        ]);
+        $this->app->instance(PublicPageFetcher::class, new class extends PublicPageFetcher
+        {
+            public function fetch(string $url, int $maxBytes, int $timeout, string $userAgent): array
+            {
+                return [
+                    'body' => '<html><head><title>Fake Title</title><meta name="description" content="Fake desc"></head>'
+                        .'<body><article><h1>Hola</h1><p>'.str_repeat('palabra ', 80).'</p></article></body></html>',
+                    'content_type' => 'text/html',
+                    'url' => $url,
+                ];
+            }
+        });
 
         $this->post('/library', ['url' => 'https://example.com/a', 'tags' => 'paper, leer'])
             ->assertRedirect();
@@ -56,7 +67,7 @@ class LibraryWebTest extends TestCase
         $this->assertSoftDeleted('library_links', ['id' => $link->id]);
     }
 
-    public function test_api_token_still_works_for_extension(): void
+    public function test_api_token_still_works_for_native_client(): void
     {
         $user = User::factory()->create();
         $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
@@ -78,9 +89,85 @@ class LibraryWebTest extends TestCase
             'title' => 'Article',
         ]);
 
-        (new FetchLinkMetadata($link->id))->handle();
+        (new FetchLinkMetadata($link->id))->handle(app(PublicPageFetcher::class));
 
         $this->assertSame('failed', $link->fresh()->metadata_status);
+    }
+
+    public function test_metadata_fetch_preserves_a_title_and_description_edited_during_download(): void
+    {
+        config(['library.fetch_enabled' => true]);
+        $user = User::factory()->create();
+        $link = LibraryLink::create([
+            'user_id' => $user->id,
+            'url' => 'https://example.com/article',
+            'canonical_url' => 'https://example.com/article',
+            'host' => 'example.com',
+            'title' => 'Original choice',
+            'metadata_status' => 'pending',
+        ]);
+        $fetcher = new class($link) extends PublicPageFetcher
+        {
+            public function __construct(private LibraryLink $link) {}
+
+            public function fetch(string $url, int $maxBytes, int $timeout, string $userAgent): array
+            {
+                $this->link->update(['title' => 'Edited while fetching', 'description' => 'Personal note']);
+
+                return ['body' => '<html><head><title>Remote title</title>'
+                    .'<meta name="description" content="Remote description"></head><body>Article</body></html>',
+                    'content_type' => 'text/html', 'url' => $url];
+            }
+        };
+
+        (new FetchLinkMetadata($link->id))->handle($fetcher);
+
+        $this->assertSame('Edited while fetching', $link->fresh()->title);
+        $this->assertSame('Personal note', $link->fresh()->description);
+        $this->assertSame('ready', $link->fresh()->metadata_status);
+        $this->assertSame('2', (string) $link->fresh()->revision);
+        $this->assertSame(3, DB::table('library_link_changes')->where('link_id', $link->id)->count());
+        $this->assertSame('2', (string) DB::table('library_link_changes')->where('link_id', $link->id)
+            ->orderByDesc('sequence')->value('revision'));
+        $link->fresh()->update(['is_favorite' => true]);
+        $this->assertSame('3', (string) $link->fresh()->revision);
+    }
+
+    public function test_snapshot_sanitizes_downloaded_html_before_storing_it(): void
+    {
+        config(['library.snapshots_enabled' => true, 'library.snapshot_disk' => 'local']);
+        Storage::fake('local');
+        $user = User::factory()->create();
+        $link = LibraryLink::create([
+            'user_id' => $user->id,
+            'url' => 'https://example.com/article',
+            'canonical_url' => 'https://example.com/article',
+            'host' => 'example.com',
+            'title' => 'Article',
+        ]);
+        $fetcher = new class extends PublicPageFetcher
+        {
+            public function fetch(string $url, int $maxBytes, int $timeout, string $userAgent): array
+            {
+                return [
+                    'body' => '<html><body><article><h1>Article</h1><p>Safe article text</p>'
+                        .'<a href="javascript:alert(1)" onclick="alert(1)">Read</a>'
+                        .'<script>alert(1)</script></article></body></html>',
+                    'content_type' => 'text/html',
+                    'url' => $url,
+                ];
+            }
+        };
+
+        (new SnapshotPage($link->id))->handle($fetcher);
+
+        $snapshot = LibrarySnapshot::where('library_link_id', $link->id)->firstOrFail();
+        $html = Storage::disk('local')->get($snapshot->storage_path);
+        $this->assertSame('ready', $link->fresh()->snapshot_status);
+        $this->assertStringContainsString('Safe article text', $html);
+        $this->assertStringNotContainsString('<script', $html);
+        $this->assertStringNotContainsString('onclick', $html);
+        $this->assertStringNotContainsString('javascript:', $html);
     }
 
     public function test_extractor_resolves_relative_urls_and_sanitizes(): void

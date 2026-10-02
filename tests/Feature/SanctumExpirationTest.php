@@ -30,7 +30,7 @@ class SanctumExpirationTest extends TestCase
     public function test_v1_auth_routes_do_not_use_sanctum_guard(): void
     {
         $routes = collect(app('router')->getRoutes())
-            ->filter(fn ($r) => str_starts_with($r->uri(), 'api/v1') || str_starts_with($r->uri(), 'api/ext'));
+            ->filter(fn ($r) => str_starts_with($r->uri(), 'api/v1'));
 
         foreach ($routes as $route) {
             $middleware = $route->gatherMiddleware();

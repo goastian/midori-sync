@@ -2,9 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Models\Device;
 use App\Models\User;
 use App\Services\SyncAuthService;
-use App\Services\SyncStorageService;
+use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -17,25 +18,24 @@ class CompressionTest extends TestCase
     use RefreshDatabase;
 
     private string $token;
+
     private User $user;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(\Database\Seeders\CollectionSeeder::class);
+        $this->seed(CollectionSeeder::class);
         $this->user = User::factory()->create(['storage_quota_bytes' => 104857600]);
         $this->token = app(SyncAuthService::class)
             ->createSessionToken($this->user)['token'];
 
-        // Seed a chunky response body.
-        $svc = app(SyncStorageService::class);
         for ($i = 0; $i < 20; $i++) {
-            $svc->upsertRecord(
-                $this->user->id,
-                'bookmarks',
-                "bk-{$i}",
-                str_repeat('A', 512),
-            );
+            Device::create([
+                'user_id' => $this->user->id,
+                'device_id' => "device-{$i}",
+                'name' => str_repeat('A', 80),
+                'type' => 'desktop',
+            ]);
         }
     }
 
@@ -45,7 +45,7 @@ class CompressionTest extends TestCase
 
         $response = $this->withToken($this->token)
             ->withHeaders(['Accept-Encoding' => 'gzip'])
-            ->getJson('/api/v1/collections/bookmarks');
+            ->getJson('/api/v1/devices');
 
         $response->assertOk();
         $this->assertNull($response->headers->get('Content-Encoding'));
@@ -58,7 +58,7 @@ class CompressionTest extends TestCase
 
         $response = $this->withToken($this->token)
             ->withHeaders(['Accept-Encoding' => 'gzip'])
-            ->getJson('/api/v1/collections/bookmarks');
+            ->getJson('/api/v1/devices');
 
         $response->assertOk();
         $this->assertSame('gzip', $response->headers->get('Content-Encoding'));
@@ -77,7 +77,7 @@ class CompressionTest extends TestCase
 
         $response = $this->withToken($this->token)
             ->withHeaders(['Accept-Encoding' => 'identity'])
-            ->getJson('/api/v1/collections/bookmarks');
+            ->getJson('/api/v1/devices');
 
         $response->assertOk();
         $this->assertNull($response->headers->get('Content-Encoding'));

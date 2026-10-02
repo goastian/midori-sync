@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\UserCollection;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -69,13 +70,19 @@ class ScheduledCommandsTest extends TestCase
             'created_at' => now(),
         ]);
 
+        DB::table('sync_native_oidc_exchanges')->insert([
+            ['token_hash' => str_repeat('a', 64), 'expires_at' => now()->subMinute(), 'created_at' => now()],
+            ['token_hash' => str_repeat('b', 64), 'expires_at' => now()->addHour(), 'created_at' => now()],
+        ]);
+
         $this->artisan('sync:cleanup-expired')
-            ->expectsOutputToContain('Cleaned up 1 expired records and 1 expired sessions')
+            ->expectsOutputToContain('Cleaned up 1 expired records, 1 expired sessions and 1 OIDC exchanges')
             ->assertSuccessful();
 
         $this->assertDatabaseHas('records', ['record_id' => 'expired', 'deleted' => true, 'payload' => '', 'version' => 2]);
         $this->assertDatabaseHas('records', ['record_id' => 'fresh']);
         $this->assertSame(1, SyncSession::count());
+        $this->assertDatabaseCount('sync_native_oidc_exchanges', 1);
     }
 
     public function test_recalculate_usage_for_specific_user(): void

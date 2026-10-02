@@ -177,13 +177,13 @@ class SyncChangeJournalTest extends TestCase
         $this->assertTrue($expired['changes'][0]['record']['deleted']);
     }
 
-    public function test_batch_and_extension_writes_are_visible_in_the_same_feed(): void
+    public function test_batch_writes_are_visible_in_the_same_feed(): void
     {
-        $this->withToken($this->token)->postJson('/api/ext/storage/bookmarks', [
-            ['id' => 'a', 'payload' => 'extension'],
-        ])->assertSuccessful();
+        $this->storage->batchUpsert($this->user->id, 'bookmarks', [
+            ['id' => 'a', 'payload' => 'first'],
+        ]);
         $before = $this->page();
-        $this->assertSame('extension', $before['changes'][0]['record']['payload']);
+        $this->assertSame('first', $before['changes'][0]['record']['payload']);
         $results = $this->storage->batchUpsert($this->user->id, 'bookmarks', [
             ['id' => 'a', 'payload' => 'must-not-survive-delete', 'deleted' => true],
             ['id' => 'b', 'payload' => 'new'],

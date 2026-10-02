@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use App\Services\SyncAuthService;
+use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -18,7 +19,7 @@ class CorsTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(\Database\Seeders\CollectionSeeder::class);
+        $this->seed(CollectionSeeder::class);
 
         config()->set('cors.allowed_origins', [
             'https://dashboard.example.com',
@@ -35,7 +36,7 @@ class CorsTest extends TestCase
 
         $response = $this->withToken($token)
             ->withHeaders(['Origin' => 'https://dashboard.example.com'])
-            ->getJson('/api/v1/sync/info');
+            ->getJson('/api/v1/devices');
 
         $response->assertOk();
         $this->assertSame(
@@ -52,7 +53,7 @@ class CorsTest extends TestCase
 
         $response = $this->withToken($token)
             ->withHeaders(['Origin' => 'https://client-abc123.example.com'])
-            ->getJson('/api/v1/sync/info');
+            ->getJson('/api/v1/devices');
 
         $response->assertOk();
         $this->assertSame(
@@ -68,7 +69,7 @@ class CorsTest extends TestCase
 
         $response = $this->withToken($token)
             ->withHeaders(['Origin' => 'https://evil.example.com'])
-            ->getJson('/api/v1/sync/info');
+            ->getJson('/api/v1/devices');
 
         $this->assertNull($response->headers->get('Access-Control-Allow-Origin'));
     }
@@ -78,7 +79,7 @@ class CorsTest extends TestCase
         $user = User::factory()->create();
         $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
 
-        $response = $this->withToken($token)->getJson('/api/v1/sync/info');
+        $response = $this->withToken($token)->getJson('/api/v1/devices');
 
         $this->assertNull($response->headers->get('Access-Control-Allow-Origin'));
     }
@@ -87,7 +88,7 @@ class CorsTest extends TestCase
     {
         $response = $this->call(
             'OPTIONS',
-            '/api/v1/sync/info',
+            '/api/v1/devices',
             [],
             [],
             [],
@@ -111,7 +112,7 @@ class CorsTest extends TestCase
     {
         $response = $this->call(
             'OPTIONS',
-            '/api/v1/sync/info',
+            '/api/v1/devices',
             [],
             [],
             [],

@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Models\SyncSession;
 use App\Models\User;
 use App\Services\SyncAuthService;
+use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -20,13 +22,13 @@ class ValidateSyncTokenTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(\Database\Seeders\CollectionSeeder::class);
+        $this->seed(CollectionSeeder::class);
         $this->user = User::factory()->create();
     }
 
     public function test_missing_token_returns_401(): void
     {
-        $this->getJson('/api/v1/sync/info')
+        $this->getJson('/api/v1/devices')
             ->assertStatus(401)
             ->assertJson(['error' => 'Authentication required']);
     }
@@ -34,7 +36,7 @@ class ValidateSyncTokenTest extends TestCase
     public function test_invalid_token_returns_401(): void
     {
         $this->withToken('not-a-real-token')
-            ->getJson('/api/v1/sync/info')
+            ->getJson('/api/v1/devices')
             ->assertStatus(401)
             ->assertJson(['error' => 'Invalid or expired token']);
     }
@@ -43,10 +45,10 @@ class ValidateSyncTokenTest extends TestCase
     {
         $token = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
 
-        \App\Models\SyncSession::query()->update(['expires_at' => now()->subSecond()]);
+        SyncSession::query()->update(['expires_at' => now()->subSecond()]);
 
         $this->withToken($token)
-            ->getJson('/api/v1/sync/info')
+            ->getJson('/api/v1/devices')
             ->assertStatus(401);
     }
 
@@ -58,7 +60,7 @@ class ValidateSyncTokenTest extends TestCase
         $auth->revokeToken($token);
 
         $this->withToken($token)
-            ->getJson('/api/v1/sync/info')
+            ->getJson('/api/v1/devices')
             ->assertStatus(401);
     }
 
@@ -66,7 +68,7 @@ class ValidateSyncTokenTest extends TestCase
     {
         $token = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
 
-        $response = $this->withToken($token)->getJson('/api/v1/sync/info');
+        $response = $this->withToken($token)->getJson('/api/v1/devices');
 
         $response->assertOk();
     }

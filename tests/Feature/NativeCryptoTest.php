@@ -2,12 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Models\CryptoKeyBundle;
 use App\Models\Device;
 use App\Models\SyncSession;
 use App\Models\User;
 use App\Services\SyncAuthService;
 use App\Services\SyncIdentityService;
-use App\Services\SyncKeyBundleService;
 use App\Services\SyncNativeCryptoService;
 use App\Services\SyncNativeEnvelope;
 use App\Services\SyncPairingService;
@@ -111,13 +111,6 @@ class NativeCryptoTest extends TestCase
     {
         $state = $this->activate();
         $generation = $this->generation();
-        $this->putJson('/api/v1/collections/bookmarks/legacy', ['payload' => 'legacy'])->assertStatus(426);
-        $this->postJson('/api/v1/collections/bookmarks', ['records' => [['id' => 'legacy', 'payload' => 'old']]])->assertStatus(426);
-        $this->postJson('/api/ext/storage/bookmarks', [['id' => 'legacy', 'payload' => 'old']])->assertStatus(426);
-        $this->deleteJson('/api/v1/collections/bookmarks/legacy')->assertStatus(426);
-        $this->deleteJson('/api/v1/collections/bookmarks')->assertStatus(426);
-        $this->deleteJson('/api/ext/data')->assertStatus(426);
-        $this->postJson('/api/v1/crypto/keys', ['encrypted_bundle' => 'old'])->assertStatus(426);
         $this->postJson('/api/v1/sync/collections/bookmarks/operations', [
             'generation' => $generation, 'operations' => [$this->operation($generation, $state['active_key_id'])],
         ])->assertStatus(426)->assertJsonPath('error', 'client_upgrade_required');
@@ -141,7 +134,7 @@ class NativeCryptoTest extends TestCase
         $code = app(SyncPairingService::class)->generate($this->user)['pairing_token'];
         $devices = Device::count();
         $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Old browser'])
-            ->assertStatus(426)->assertJsonPath('error', 'client_upgrade_required');
+            ->assertUnprocessable()->assertJsonValidationErrors('native_client');
         $this->assertDatabaseHas('sync_pairing_codes', ['token_hash' => hash('sha256', $code)]);
         $this->assertSame($devices, Device::count());
     }
@@ -156,7 +149,9 @@ class NativeCryptoTest extends TestCase
         $this->assertDatabaseHas('records', ['record_id' => 'legacy', 'payload' => 'encrypted legacy payload']);
         $this->deleteJson('/api/v1/sync/data', ['crypto' => $this->context($state)])->assertNoContent();
         $this->assertFalse($this->state()['migration_required']);
-        app(SyncKeyBundleService::class)->store($this->user->id, 'legacy recovery bundle');
+        CryptoKeyBundle::create([
+            'user_id' => $this->user->id, 'encrypted_bundle' => 'legacy recovery bundle', 'version' => 1,
+        ]);
         $this->assertTrue($this->state()['migration_required']);
         $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($this->state())] + $this->key())
             ->assertStatus(409)->assertJsonPath('error', 'legacy_migration_required');
@@ -180,6 +175,27 @@ class NativeCryptoTest extends TestCase
             ->assertOk()->assertJsonPath('results.0.status', 'applied');
         $this->assertDatabaseCount('records', 2);
         $this->assertDatabaseCount('sync_changes', 2);
+    }
+
+    public function test_link_association_records_are_encrypted_and_bound_to_their_collection(): void
+    {
+        $state = $this->activate();
+        $url = '/api/v1/sync/collections/link-associations';
+        $generation = $this->getJson($url.'/changes')->assertOk()->json('generation');
+        $operation = $this->operation($generation, $state['active_key_id'], 'bookmarkGuid');
+        $payload = json_decode($operation['payload'], true, flags: JSON_THROW_ON_ERROR);
+        $payload['context']['collection'] = 'link-associations';
+        $operation['payload'] = json_encode($payload, JSON_THROW_ON_ERROR);
+        $request = ['crypto' => $this->context($state), 'generation' => $generation, 'operations' => [$operation]];
+        $this->postJson($url.'/operations', $request)->assertOk()->assertJsonPath('results.0.status', 'applied');
+        $this->postJson($url.'/operations', $request)->assertOk()->assertJsonPath('results.0.status', 'applied');
+        $this->assertDatabaseHas('records', ['record_id' => 'bookmarkGuid', 'payload' => $operation['payload']]);
+        $this->getJson($url.'/changes')->assertOk()->assertJsonPath('changes.0.record.id', 'bookmarkGuid');
+
+        $wrong = $this->operation($generation, $state['active_key_id'], 'anotherGuid');
+        $this->postJson($url.'/operations', ['crypto' => $this->context($state), 'generation' => $generation,
+            'operations' => [$wrong]])->assertOk()->assertJsonPath('results.0.status', 'invalid');
+        $this->assertDatabaseMissing('records', ['record_id' => 'anotherGuid']);
     }
 
     public function test_unknown_keys_and_mismatched_record_metadata_never_write(): void
@@ -227,7 +243,6 @@ class NativeCryptoTest extends TestCase
         $this->assertNotSame($state['epoch'], $empty['epoch']);
         $this->assertSame('0', $empty['revision']);
         $this->assertSame([], $empty['keys']);
-        $this->putJson('/api/v1/collections/bookmarks/stale', ['payload' => 'resurrection'])->assertStatus(426);
         $this->postJson('/api/v1/crypto/activate', ['crypto' => ['epoch' => $state['epoch'], 'revision' => '0']] + $this->key(2))
             ->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
         $fresh = $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($empty)] + $this->key(2))->assertOk()->json();

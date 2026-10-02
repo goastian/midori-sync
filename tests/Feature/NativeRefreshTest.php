@@ -46,10 +46,10 @@ class NativeRefreshTest extends TestCase
             ->assertJsonPath('authentication.refresh.version', 1)
             ->assertJsonPath('authentication.refresh.request_bytes', SyncRefreshService::MAX_REQUEST_BYTES);
         $user = User::factory()->create(['authentik_issuer' => SyncIdentityService::DEVELOPMENT_ISSUER]);
-        foreach ([[false, false], [true, false], [true, true]] as [$native, $refresh]) {
+        foreach ([false, true] as $refresh) {
             $code = app(SyncPairingService::class)->generate($user)['pairing_token'];
             $result = $this->postJson('/api/v1/pair/redeem', [
-                'pairing_token' => $code, 'device_name' => 'Desktop', 'native_client' => $native, 'native_refresh' => $refresh,
+                'pairing_token' => $code, 'device_name' => 'Desktop', 'native_client' => true, 'native_refresh' => $refresh,
             ])->assertCreated()->json();
             $this->assertSame($refresh, array_key_exists('refresh_token', $result));
             $session = SyncSession::where('token_hash', hash('sha256', $result['token']))->firstOrFail();
@@ -66,9 +66,9 @@ class NativeRefreshTest extends TestCase
         $code = app(SyncPairingService::class)->generate($user)['pairing_token'];
         $this->postJson('/api/v1/pair/redeem', [
             'pairing_token' => $code, 'device_name' => 'Invalid', 'native_refresh' => true,
-        ])->assertStatus(409)->assertExactJson(['error' => 'native_session_required']);
-        $this->assertDatabaseCount('devices', 3);
-        $this->assertDatabaseCount('sync_sessions', 3);
+        ])->assertUnprocessable()->assertJsonValidationErrors('native_client');
+        $this->assertDatabaseCount('devices', 2);
+        $this->assertDatabaseCount('sync_sessions', 2);
         $this->assertDatabaseHas('sync_pairing_codes', ['token_hash' => hash('sha256', $code)]);
     }
 
@@ -272,7 +272,7 @@ class NativeRefreshTest extends TestCase
 
     public static function accessRevocationRoutes(): array
     {
-        return [['DELETE', '/api/v1/auth/token'], ['POST', '/api/ext/logout']];
+        return [['DELETE', '/api/v1/auth/token']];
     }
 
     #[DataProvider('accessRevocationRoutes')]
@@ -319,7 +319,7 @@ class NativeRefreshTest extends TestCase
     public static function revocations(): array
     {
         return [['refresh_current'], ['refresh_spent'], ['access'], ['audit'], ['audit_all'],
-            ['device_web'], ['device_v1'], ['device_ext']];
+            ['device_web'], ['device_v1']];
     }
 
     #[DataProvider('revocations')]
@@ -341,7 +341,7 @@ class NativeRefreshTest extends TestCase
         } elseif ($surface === 'device_web') {
             $this->actingAs($user)->delete('/devices/'.$device->device_id)->assertRedirect();
         } else {
-            $this->withToken($rotated['token'])->deleteJson('/api/'.($surface === 'device_v1' ? 'v1' : 'ext').'/devices/'.$device->device_id)->assertNoContent();
+            $this->withToken($rotated['token'])->deleteJson('/api/v1/devices/'.$device->device_id)->assertNoContent();
         }
         $this->assertDatabaseMissing('sync_sessions', ['id' => $session->id]);
         $this->assertDatabaseCount('sync_refresh_receipts', 0);

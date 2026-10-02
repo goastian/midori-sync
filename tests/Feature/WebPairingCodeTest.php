@@ -143,4 +143,30 @@ class WebPairingCodeTest extends TestCase
             'native_client' => true,
         ])->assertCreated()->assertJsonPath('identity.issuer', $issuer);
     }
+
+    public function test_fresh_web_login_rebinds_a_previous_provider_issuer_after_shared_issuer_setup(): void
+    {
+        config([
+            'services.sync.local_dev' => false,
+            'services.authentik.issuer' => 'https://accounts.example.test/',
+        ]);
+        $user = User::factory()->create([
+            'authentik_id' => 'existing-subject',
+            'authentik_issuer' => 'https://accounts.example.test/application/o/old-provider/',
+        ]);
+        $this->actingAs($user)->postJson('/devices/pairing-code')
+            ->assertStatus(409)->assertJsonPath('error', 'identity_issuer_mismatch');
+
+        $identity = Mockery::mock();
+        $identity->shouldReceive('getId')->andReturn('existing-subject');
+        $identity->shouldReceive('getEmail')->andReturn($user->email);
+        $identity->shouldReceive('getName')->andReturn($user->name);
+        $identity->shouldReceive('getAvatar')->andReturn(null);
+        $provider = Mockery::mock();
+        $provider->shouldReceive('user')->once()->andReturn($identity);
+        Socialite::shouldReceive('driver')->with('authentik')->andReturn($provider);
+
+        $this->get('/auth/callback')->assertRedirect('/dashboard');
+        $this->assertSame('https://accounts.example.test/', $user->fresh()->authentik_issuer);
+    }
 }

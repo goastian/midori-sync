@@ -19,7 +19,7 @@ class DeviceRevocationTest extends TestCase
 
     public static function surfaces(): array
     {
-        return [['/api/v1/devices'], ['/api/ext/devices'], ['/devices']];
+        return [['/api/v1/devices'], ['/devices']];
     }
 
     #[DataProvider('surfaces')]

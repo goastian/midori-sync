@@ -54,6 +54,7 @@ class NativeBrowseTest extends TestCase
         $items = array_merge($first->json('items'), $second->json('items'));
         $tagged = collect($items)->firstWhere('id', $links[0]->id);
         $this->assertSame(['reading'], $tagged['tags']);
+        $this->assertSame((string) LibraryLink::findOrFail($links[0]->id)->revision, $tagged['revision']);
         $this->getJson('/api/v1/capabilities')->assertOk()
             ->assertJsonPath('link.browse_version', 1)
             ->assertJsonPath('link.browse_page_limit', 50);
@@ -64,5 +65,49 @@ class NativeBrowseTest extends TestCase
     public function test_browse_requires_a_session(): void
     {
         $this->getJson('/api/library/v1/links')->assertUnauthorized();
+    }
+
+    public function test_search_is_case_insensitive_literal_account_scoped_and_cursor_paginated(): void
+    {
+        $user = User::factory()->create();
+        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $matches = [];
+        foreach (['Reading One', 'Reading Two', 'Reading Three'] as $title) {
+            $matches[] = LibraryLink::create([
+                'user_id' => $user->id, 'url' => 'https://example.com/'.str_replace(' ', '-', $title),
+                'title' => $title,
+            ]);
+        }
+        LibraryLink::create(['user_id' => $user->id, 'url' => 'https://example.com/other', 'title' => 'Other']);
+        $percent = LibraryLink::create(['user_id' => $user->id,
+            'url' => 'https://example.com/percent', 'title' => '100% useful']);
+        $underscore = LibraryLink::create(['user_id' => $user->id,
+            'url' => 'https://example.com/underscore', 'title' => 'under_score']);
+        $description = LibraryLink::create(['user_id' => $user->id,
+            'url' => 'https://example.com/description', 'title' => 'Other', 'description' => 'Rare description phrase']);
+        $host = LibraryLink::create(['user_id' => $user->id,
+            'url' => 'https://example.com/host-field', 'title' => 'Other', 'host' => 'special.example.test']);
+        LibraryLink::create(['user_id' => User::factory()->create()->id,
+            'url' => 'https://example.com/foreign', 'title' => 'Reading foreign']);
+
+        $first = $this->withToken($token)->getJson('/api/library/v1/links?q=READING&per_page=2')
+            ->assertOk()->assertJsonCount(2, 'items');
+        $second = $this->withToken($token)->getJson('/api/library/v1/links?q=READING&per_page=2&cursor='
+            .rawurlencode($first->json('next_cursor')))->assertOk()->assertJsonCount(1, 'items')
+            ->assertJsonPath('next_cursor', null);
+        $seen = array_merge(array_column($first->json('items'), 'id'), array_column($second->json('items'), 'id'));
+        $this->assertEqualsCanonicalizing(array_map(fn (LibraryLink $link) => $link->id, $matches), $seen);
+        $this->withToken($token)->getJson('/api/library/v1/links?q=%25')->assertOk()
+            ->assertJsonCount(1, 'items')->assertJsonPath('items.0.id', $percent->id);
+        $this->withToken($token)->getJson('/api/library/v1/links?q=_')->assertOk()
+            ->assertJsonCount(1, 'items')->assertJsonPath('items.0.id', $underscore->id);
+        $this->withToken($token)->getJson('/api/library/v1/links?q=RARE%20DESCRIPTION')->assertOk()
+            ->assertJsonCount(1, 'items')->assertJsonPath('items.0.id', $description->id);
+        $this->withToken($token)->getJson('/api/library/v1/links?q=special.example')->assertOk()
+            ->assertJsonCount(1, 'items')->assertJsonPath('items.0.id', $host->id);
+        $this->withToken($token)->getJson('/api/library/v1/links?q='.str_repeat('x', 161))->assertUnprocessable();
+        $this->withToken($token)->getJson('/api/library/v1/links?q=reading%0Aforeign')->assertUnprocessable();
+        $this->assertSame(4, DB::table('pg_indexes')->where('tablename', 'library_links')
+            ->where('indexname', 'like', 'library_links_%_trgm_idx')->count());
     }
 }
