@@ -7,6 +7,22 @@ y el proyecto usa [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Midori Desktop now uses the native Sync and Link client through `/api/v1`.
+- CI builds the web dashboard instead of running tests for the retired extension.
+
+### Removed
+
+- The extension source, packaging assets, JavaScript crypto bundle, obsolete
+  Vitest suite, exclusive npm dependencies, `/api/ext` routes and controllers,
+  OAuth polling callback, and the retired conversion and key-bundle endpoints.
+
+### Fixed
+
+- Link metadata and HTML preservation now validate redirects and DNS targets,
+  pin public destinations, bound decompressed downloads, and sanitize saved HTML.
+
 ### Added
 
 - Documentacion operativa: `docs/extension-dev.md`, `docs/contributing.md`,
