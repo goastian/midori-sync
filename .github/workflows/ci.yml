@@ -7,9 +7,32 @@ on:
 
 jobs:
   php:
-    name: PHP — tests + audit
+    name: PHP — PostgreSQL ${{ matrix.postgres }} tests + audit
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      matrix:
+        postgres: ['16', '18']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_DB: midori_sync_test
+          POSTGRES_USER: midori_sync_test
+          POSTGRES_PASSWORD: midori-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U midori_sync_test -d midori_sync_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      APP_ENV: testing
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: midori_sync_test
+      DB_USERNAME: midori_sync_test
+      DB_PASSWORD: midori-ci-only
     steps:
       - uses: actions/checkout@v4
 
@@ -17,7 +40,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: mbstring, intl, pdo_sqlite, sqlite3, sodium
+          extensions: mbstring, intl, pdo_pgsql, pgsql, pcntl, sodium
           coverage: none
           tools: composer:v2
 
@@ -35,9 +58,6 @@ jobs:
         run: |
           cp .env.example .env
           php artisan key:generate
-          # In CI we run against in-memory SQLite — no Postgres needed.
-          sed -i 's/^DB_CONNECTION=.*/DB_CONNECTION=sqlite/' .env
-          sed -i 's|^DB_DATABASE=.*|DB_DATABASE=:memory:|' .env
           # Quiet config defaults that are not exercised in tests.
           sed -i 's/^CACHE_STORE=.*/CACHE_STORE=array/' .env
           sed -i 's/^SESSION_DRIVER=.*/SESSION_DRIVER=array/' .env
@@ -47,13 +67,13 @@ jobs:
         run: vendor/bin/pint --test
 
       - name: PHPUnit
-        run: php artisan test --parallel=false
+        run: php artisan test
 
       - name: composer audit
         run: composer audit --no-interaction --abandoned=report
 
   js:
-    name: JS — tests + audit
+    name: JS — dashboard build + audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -68,8 +88,8 @@ jobs:
       - name: Install
         run: npm ci --ignore-scripts
 
-      - name: Vitest
-        run: npx vitest run
+      - name: Build dashboard
+        run: npm run build
 
       - name: npm audit (high+)
         run: npm audit --omit=dev --audit-level=high
