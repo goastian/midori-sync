@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Midori Native Sync API",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "Implemented native-client profile of the Laravel API. Experimental: capabilities currently announce native_ready=false. This document covers pairing, public-client OIDC exchange, session identity/renewal/revocation, incremental collections and native key lifecycle. The retired extension API has been removed. Send Accept: application/json and Content-Type: application/json for JSON bodies. Byte limits are UTF-8 byte limits, not JSON Schema character counts. See native-sync-api.md for transaction and migration semantics."
   },
   "servers": [
@@ -60,7 +60,7 @@
       "post": {
         "operationId": "createPairingCode",
         "summary": "Create a short-lived pairing code",
-        "description": "Requires an existing account session. The code is consumed atomically during redemption; it does not transfer E2EE keys.",
+        "description": "Requires an existing account session. The code is consumed atomically during redemption; the new authenticated native device can then fetch a server-held recovery secret when available.",
         "responses": {
           "200": {
             "description": "Successful response",
@@ -551,6 +551,56 @@
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
+        }
+      }
+    },
+    "/crypto/recovery": {
+      "get": {
+        "operationId": "getServerRecoverySecret",
+        "summary": "Recover native keys after authenticated device login",
+        "description": "Requires a bound version-2 session. Returns the secret encrypted under APP_KEY at rest. The client must match epoch and revision to /crypto/state before unwrapping keys. Responses are no-store.",
+        "responses": {
+          "200": {
+            "description": "Current epoch recovery secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryResponse"
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      },
+      "post": {
+        "operationId": "escrowNativeRecoverySecret",
+        "summary": "Atomically publish recovery for all existing native keys",
+        "description": "Requires a bound version-2 session and exact epoch/revision. The submitted set of key IDs must equal the full current registry. Updates all bundles, stores the secret encrypted under APP_KEY and increments revision atomically. Responses are no-store.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EscrowRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated crypto state",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CryptoState" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "422": { "$ref": "#/components/responses/InvalidRequest" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
         }
       }
     },
@@ -1499,6 +1549,9 @@
           "legacy_frozen": {
             "type": "boolean"
           },
+          "server_recovery": {
+            "type": "boolean"
+          },
           "keys": {
             "type": "array",
             "items": {
@@ -1516,6 +1569,7 @@
           "incompatible_sessions",
           "migration_required",
           "legacy_frozen",
+          "server_recovery",
           "keys"
         ]
       },
@@ -2251,6 +2305,9 @@
           "encrypted_bundle": {
             "$ref": "#/components/schemas/WrappedKey/properties/encrypted_bundle"
           },
+          "recovery_secret": {
+            "$ref": "#/components/schemas/RecoverySecret"
+          },
           "revoke_incompatible": {
             "type": "boolean",
             "default": false
@@ -2261,6 +2318,33 @@
           "key_id",
           "encrypted_bundle"
         ]
+      },
+      "RecoverySecret": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "RecoveryResponse": {
+        "type": "object",
+        "properties": {
+          "epoch": { "$ref": "#/components/schemas/UUID" },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "recovery_secret": { "$ref": "#/components/schemas/RecoverySecret" }
+        },
+        "required": ["epoch", "revision", "recovery_secret"]
+      },
+      "EscrowRequest": {
+        "type": "object",
+        "properties": {
+          "crypto": { "$ref": "#/components/schemas/CryptoContext" },
+          "keys": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/WrappedKey" },
+            "minItems": 1,
+            "maxItems": 8
+          },
+          "recovery_secret": { "$ref": "#/components/schemas/RecoverySecret" }
+        },
+        "required": ["crypto", "keys", "recovery_secret"]
       },
       "RotateRequest": {
         "type": "object",

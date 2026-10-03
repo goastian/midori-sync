@@ -14,6 +14,7 @@ use App\Services\SyncPairingService;
 use App\Services\SyncStorageService;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -66,6 +67,53 @@ class NativeCryptoTest extends TestCase
     {
         return $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($this->state())] + $this->key())
             ->assertOk()->assertJsonPath('mode', 'native')->assertJsonPath('revision', '1')->json();
+    }
+
+    public function test_server_recovery_is_encrypted_account_bound_and_cleared_on_reset(): void
+    {
+        $secret = str_repeat('a', 64);
+        $legacy = app(SyncAuthService::class)->createSessionToken($this->user, protocolVersion: 1)['token'];
+        $before = $this->state();
+        $state = $this->postJson('/api/v1/crypto/activate', [
+            'crypto' => $this->context($before), 'recovery_secret' => $secret, 'revoke_incompatible' => true,
+        ] + $this->key())->assertOk()->assertJsonPath('server_recovery', true)->json();
+        $this->assertArrayNotHasKey('recovery_secret', $state);
+        $saved = DB::table('sync_server_recovery')->where('user_id', $this->user->id)->first();
+        $this->assertNotNull($saved);
+        $this->assertSame($state['epoch'], $saved->epoch);
+        $this->assertStringNotContainsString($secret, $saved->encrypted_secret);
+        $this->assertSame($secret, $this->getJson('/api/v1/crypto/recovery')->assertOk()
+            ->assertHeader('Cache-Control', 'no-store, private')->json('recovery_secret'));
+        $this->withToken($legacy)->getJson('/api/v1/crypto/recovery')->assertUnauthorized();
+        $this->withToken('invalid')->getJson('/api/v1/crypto/recovery')->assertUnauthorized();
+        $this->withToken($this->token);
+        $other = User::factory()->create(['authentik_issuer' => SyncIdentityService::DEVELOPMENT_ISSUER]);
+        $device = Device::create(['user_id' => $other->id, 'device_id' => (string) Str::uuid(), 'name' => 'Other', 'type' => 'desktop']);
+        $otherToken = app(SyncAuthService::class)->createSessionToken($other, $device->id, protocolVersion: 2)['token'];
+        $this->withToken($otherToken)->getJson('/api/v1/crypto/recovery')->assertNotFound();
+        $this->withToken($this->token);
+        $this->deleteJson('/api/v1/sync/data', ['crypto' => $this->context($state)])->assertNoContent();
+        $this->assertDatabaseCount('sync_server_recovery', 0);
+        $this->getJson('/api/v1/crypto/recovery')->assertNotFound();
+    }
+
+    public function test_existing_native_keys_can_be_escrowed_atomically(): void
+    {
+        $state = $this->activate();
+        $secret = str_repeat('b', 64);
+        $body = ['crypto' => $this->context($state), 'keys' => [$this->key()], 'recovery_secret' => $secret];
+        $this->postJson('/api/v1/crypto/recovery', $body)->assertOk()
+            ->assertJsonPath('server_recovery', true)->assertJsonPath('revision', '2');
+        $this->postJson('/api/v1/crypto/recovery', $body)->assertStatus(409)
+            ->assertJsonPath('error', 'crypto_state_conflict');
+        $current = $this->state();
+        $this->postJson('/api/v1/crypto/recovery', [
+            'crypto' => $this->context($current), 'keys' => [$this->key(2)], 'recovery_secret' => str_repeat('c', 64),
+        ])->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
+        $this->assertSame($secret, $this->getJson('/api/v1/crypto/recovery')->assertOk()->json('recovery_secret'));
+        $this->postJson('/api/v1/crypto/rotate', ['crypto' => $this->context($current)] + $this->key(2))
+            ->assertOk()->assertJsonPath('server_recovery', false);
+        $this->getJson('/api/v1/crypto/recovery')->assertNotFound();
     }
 
     private function generation(): string
