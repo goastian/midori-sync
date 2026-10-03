@@ -42,7 +42,7 @@ return [
     |--------------------------------------------------------------------------
     |
     | Midori Sync does NOT issue Sanctum personal access tokens for the
-    | extension or the v1 API. The single source of TTL for sync sessions
+    | native v1 API. The single source of TTL for sync sessions
     | is `App\Models\SyncSession` (driven by `SYNC_TOKEN_TTL`, default
     | 3600s) — see `docs/adr/0002-sanctum-vs-syncsession.md`.
     |

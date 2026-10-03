@@ -49,7 +49,7 @@ class NativeRefreshTest extends TestCase
         foreach ([false, true] as $refresh) {
             $code = app(SyncPairingService::class)->generate($user)['pairing_token'];
             $result = $this->postJson('/api/v1/pair/redeem', [
-                'pairing_token' => $code, 'device_name' => 'Desktop', 'native_client' => true, 'native_refresh' => $refresh,
+                'pairing_token' => $code, 'device_name' => 'Desktop', 'native_refresh' => $refresh,
             ])->assertCreated()->json();
             $this->assertSame($refresh, array_key_exists('refresh_token', $result));
             $session = SyncSession::where('token_hash', hash('sha256', $result['token']))->firstOrFail();
@@ -65,11 +65,11 @@ class NativeRefreshTest extends TestCase
         }
         $code = app(SyncPairingService::class)->generate($user)['pairing_token'];
         $this->postJson('/api/v1/pair/redeem', [
-            'pairing_token' => $code, 'device_name' => 'Invalid', 'native_refresh' => true,
-        ])->assertUnprocessable()->assertJsonValidationErrors('native_client');
-        $this->assertDatabaseCount('devices', 2);
-        $this->assertDatabaseCount('sync_sessions', 2);
-        $this->assertDatabaseHas('sync_pairing_codes', ['token_hash' => hash('sha256', $code)]);
+            'pairing_token' => $code, 'device_name' => 'Additional device', 'native_refresh' => true,
+        ])->assertCreated()->assertJsonStructure(['refresh_token']);
+        $this->assertDatabaseCount('devices', 3);
+        $this->assertDatabaseCount('sync_sessions', 3);
+        $this->assertDatabaseMissing('sync_pairing_codes', ['token_hash' => hash('sha256', $code)]);
     }
 
     public function test_rotation_recovers_the_exact_response_even_after_access_expiration(): void
@@ -225,7 +225,7 @@ class NativeRefreshTest extends TestCase
             $this->renewableSession($user);
         }
         $code = app(SyncPairingService::class)->generate($user)['pairing_token'];
-        $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Over limit', 'native_client' => true, 'native_refresh' => true])
+        $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Over limit', 'native_refresh' => true])
             ->assertStatus(409)->assertExactJson(['error' => 'refresh_session_capacity']);
         $this->assertDatabaseCount('devices', SyncRefreshService::MAX_SESSIONS);
         $this->assertDatabaseHas('sync_pairing_codes', ['token_hash' => hash('sha256', $code)]);

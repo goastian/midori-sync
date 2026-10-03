@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Models\Device;
 use App\Models\User;
-use App\Services\SyncAuthService;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -26,8 +25,7 @@ class CompressionTest extends TestCase
         parent::setUp();
         $this->seed(CollectionSeeder::class);
         $this->user = User::factory()->create(['storage_quota_bytes' => 104857600]);
-        $this->token = app(SyncAuthService::class)
-            ->createSessionToken($this->user)['token'];
+        $this->token = $this->createNativeSessionToken($this->user)['token'];
 
         for ($i = 0; $i < 20; $i++) {
             Device::create([

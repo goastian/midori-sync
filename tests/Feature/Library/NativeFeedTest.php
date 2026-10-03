@@ -5,7 +5,6 @@ namespace Tests\Feature\Library;
 use App\Models\Library\LibraryLink;
 use App\Models\Library\LibraryTag;
 use App\Models\User;
-use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
@@ -18,7 +17,7 @@ class NativeFeedTest extends TestCase
 
     private function token(User $user): string
     {
-        return app(SyncAuthService::class)->createSessionToken($user)['token'];
+        return $this->createNativeSessionToken($user)['token'];
     }
 
     public function test_native_web_job_tag_and_delete_changes_share_a_revisioned_feed(): void

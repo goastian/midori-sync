@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\User;
-use App\Services\SyncAuthService;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\RateLimiter;
@@ -30,8 +29,7 @@ class RateLimitTest extends TestCase
         config()->set('services.sync.rate_limit_write', 2);
 
         $this->user = User::factory()->create(['storage_quota_bytes' => 104857600]);
-        $this->token = app(SyncAuthService::class)
-            ->createSessionToken($this->user)['token'];
+        $this->token = $this->createNativeSessionToken($this->user)['token'];
 
         RateLimiter::clear("sync:r:{$this->user->id}");
         RateLimiter::clear("sync:w:{$this->user->id}");

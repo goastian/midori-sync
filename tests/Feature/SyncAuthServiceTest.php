@@ -7,7 +7,6 @@ use App\Models\SyncSession;
 use App\Models\User;
 use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Carbon;
 use Tests\TestCase;
 
 /**
@@ -24,6 +23,7 @@ class SyncAuthServiceTest extends TestCase
     use RefreshDatabase;
 
     private SyncAuthService $service;
+
     private User $user;
 
     protected function setUp(): void
@@ -35,7 +35,7 @@ class SyncAuthServiceTest extends TestCase
 
     public function test_create_session_token_returns_plaintext_and_persists_hash(): void
     {
-        $result = $this->service->createSessionToken($this->user, null, '203.0.113.5', 'Midori/1.0');
+        $result = $this->createNativeSessionToken($this->user, ipAddress: '203.0.113.5', userAgent: 'Midori/1.0');
 
         $this->assertArrayHasKey('token', $result);
         $this->assertArrayHasKey('expires_at', $result);
@@ -53,7 +53,7 @@ class SyncAuthServiceTest extends TestCase
     public function test_create_session_token_truncates_long_user_agent(): void
     {
         $longUa = str_repeat('A', 1024);
-        $result = $this->service->createSessionToken($this->user, null, null, $longUa);
+        $result = $this->createNativeSessionToken($this->user, userAgent: $longUa);
 
         $session = SyncSession::where('token_hash', hash('sha256', $result['token']))->firstOrFail();
         $this->assertSame(512, strlen($session->user_agent));
@@ -61,7 +61,7 @@ class SyncAuthServiceTest extends TestCase
 
     public function test_validate_token_returns_session_for_valid_token(): void
     {
-        $result = $this->service->createSessionToken($this->user);
+        $result = $this->createNativeSessionToken($this->user);
         $session = $this->service->validateToken($result['token']);
 
         $this->assertNotNull($session);
@@ -75,7 +75,7 @@ class SyncAuthServiceTest extends TestCase
 
     public function test_validate_token_returns_null_for_expired_session(): void
     {
-        $result = $this->service->createSessionToken($this->user);
+        $result = $this->createNativeSessionToken($this->user);
 
         SyncSession::query()->update(['expires_at' => now()->subMinute()]);
 
@@ -84,8 +84,8 @@ class SyncAuthServiceTest extends TestCase
 
     public function test_revoke_token_removes_only_target_session(): void
     {
-        $a = $this->service->createSessionToken($this->user);
-        $b = $this->service->createSessionToken($this->user);
+        $a = $this->createNativeSessionToken($this->user);
+        $b = $this->createNativeSessionToken($this->user);
 
         $this->assertTrue($this->service->revokeToken($a['token']));
         $this->assertNull($this->service->validateToken($a['token']));
@@ -100,9 +100,9 @@ class SyncAuthServiceTest extends TestCase
     public function test_revoke_all_for_user_removes_every_session(): void
     {
         $other = User::factory()->create();
-        $this->service->createSessionToken($this->user);
-        $this->service->createSessionToken($this->user);
-        $survivor = $this->service->createSessionToken($other);
+        $this->createNativeSessionToken($this->user);
+        $this->createNativeSessionToken($this->user);
+        $survivor = $this->createNativeSessionToken($other);
 
         $deleted = $this->service->revokeAllForUser($this->user->id);
 
@@ -113,8 +113,8 @@ class SyncAuthServiceTest extends TestCase
 
     public function test_cleanup_expired_only_removes_past_sessions(): void
     {
-        $live = $this->service->createSessionToken($this->user);
-        $stale = $this->service->createSessionToken($this->user);
+        $live = $this->createNativeSessionToken($this->user);
+        $stale = $this->createNativeSessionToken($this->user);
 
         SyncSession::where('token_hash', hash('sha256', $stale['token']))
             ->update(['expires_at' => now()->subHour()]);
@@ -135,7 +135,7 @@ class SyncAuthServiceTest extends TestCase
             'type' => 'desktop',
         ]);
 
-        $this->service->createSessionToken($this->user, $device->id);
+        $this->createNativeSessionToken($this->user, $device);
 
         $this->assertSame(
             $device->id,

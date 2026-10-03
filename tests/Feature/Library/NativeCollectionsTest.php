@@ -4,7 +4,6 @@ namespace Tests\Feature\Library;
 
 use App\Models\Library\LibraryCollection;
 use App\Models\User;
-use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -15,7 +14,7 @@ class NativeCollectionsTest extends TestCase
     public function test_collection_picker_is_scoped_bounded_and_searchable(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
         for ($index = 0; $index < 31; $index++) {
             LibraryCollection::create(['user_id' => $user->id, 'name' => sprintf('Reading %02d', $index)]);
         }

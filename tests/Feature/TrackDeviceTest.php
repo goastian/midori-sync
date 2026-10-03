@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use App\Models\Device;
 use App\Models\SyncSession;
 use App\Models\User;
-use App\Services\SyncAuthService;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -40,9 +39,7 @@ class TrackDeviceTest extends TestCase
             'browser_version' => 'Midori 13.0',
         ]);
 
-        /** @var SyncAuthService $auth */
-        $auth = app(SyncAuthService::class);
-        $result = $auth->createSessionToken($this->user, $this->device->id);
+        $result = $this->createNativeSessionToken($this->user, $this->device);
         $this->token = $result['token'];
     }
 

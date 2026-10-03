@@ -5,7 +5,6 @@ namespace Tests\Feature\Library;
 use App\Models\Library\LibraryLink;
 use App\Models\Library\LibraryTag;
 use App\Models\User;
-use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -17,7 +16,7 @@ class NativeBrowseTest extends TestCase
     public function test_cursor_browsing_is_stable_scoped_and_bounded(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
         $timestamp = now()->subDay()->startOfSecond();
         $links = [];
         for ($i = 0; $i < 4; $i++) {
@@ -70,7 +69,7 @@ class NativeBrowseTest extends TestCase
     public function test_search_is_case_insensitive_literal_account_scoped_and_cursor_paginated(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
         $matches = [];
         foreach (['Reading One', 'Reading Two', 'Reading Three'] as $title) {
             $matches[] = LibraryLink::create([

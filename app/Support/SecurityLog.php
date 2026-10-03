@@ -14,21 +14,39 @@ use Illuminate\Support\Facades\Log;
 final class SecurityLog
 {
     public const EVENT_LOGIN_SUCCESS = 'auth.login.success';
+
     public const EVENT_LOGIN_FAILED = 'auth.login.failed';
+
     public const EVENT_LOGOUT = 'auth.logout';
+
     public const EVENT_TOKEN_ISSUED = 'auth.token.issued';
+
     public const EVENT_TOKEN_REVOKED = 'auth.token.revoked';
+
     public const EVENT_TOKEN_REVOKED_BULK = 'auth.token.revoked_bulk';
+
     public const EVENT_TOKEN_INVALID = 'auth.token.invalid';
+
+    public const EVENT_REFRESH_REUSED = 'auth.refresh.reused';
+
     public const EVENT_OAUTH_START = 'auth.oauth.start';
+
     public const EVENT_OAUTH_CALLBACK = 'auth.oauth.callback';
+
     public const EVENT_PAIRING_GENERATED = 'auth.pairing.generated';
+
     public const EVENT_PAIRING_REDEEMED = 'auth.pairing.redeemed';
+
     public const EVENT_PAIRING_REJECTED = 'auth.pairing.rejected';
+
     public const EVENT_QUOTA_EXCEEDED = 'quota.exceeded';
+
     public const EVENT_QUOTA_CHANGED = 'quota.changed';
+
     public const EVENT_DATA_WIPED = 'data.wiped';
+
     public const EVENT_DEVICE_REVOKED = 'device.revoked';
+
     public const EVENT_RATE_LIMIT_HIT = 'ratelimit.hit';
 
     public static function info(string $event, array $context = [], ?Request $request = null): void

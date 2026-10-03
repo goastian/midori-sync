@@ -30,10 +30,10 @@ class DeviceRevocationTest extends TestCase
         $device = Device::create(['user_id' => $user->id, 'device_id' => 'target', 'name' => 'Target', 'type' => 'desktop']);
         $foreign = Device::create(['user_id' => $other->id, 'device_id' => 'target', 'name' => 'Other account', 'type' => 'desktop']);
         $auth = app(SyncAuthService::class);
-        $manager = $auth->createSessionToken($user)['token'];
-        $target = $auth->createSessionToken($user, $device->id)['token'];
-        $expired = $auth->createSessionToken($user, $device->id)['token'];
-        $survivor = $auth->createSessionToken($other, $foreign->id)['token'];
+        $manager = $this->createNativeSessionToken($user)['token'];
+        $target = $this->createNativeSessionToken($user, $device)['token'];
+        $expired = $this->createNativeSessionToken($user, $device)['token'];
+        $survivor = $this->createNativeSessionToken($other, $foreign)['token'];
         SyncSession::where('token_hash', hash('sha256', $expired))->update(['expires_at' => now()->subMinute()]);
 
         if ($path === '/devices') {
@@ -57,8 +57,8 @@ class DeviceRevocationTest extends TestCase
         $other = User::factory()->create();
         $device = Device::create(['user_id' => $other->id, 'device_id' => 'foreign', 'name' => 'Foreign', 'type' => 'desktop']);
         $auth = app(SyncAuthService::class);
-        $token = $auth->createSessionToken($user)['token'];
-        $foreign = $auth->createSessionToken($other, $device->id)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
+        $foreign = $this->createNativeSessionToken($other, $device)['token'];
         if ($path === '/devices') {
             $this->actingAs($user)->delete($path.'/foreign')->assertRedirect();
         } else {
@@ -108,7 +108,7 @@ class DeviceRevocationTest extends TestCase
         $user = User::factory()->create();
         $device = Device::create(['user_id' => $user->id, 'device_id' => 'rollback', 'name' => 'Rollback', 'type' => 'desktop']);
         $auth = app(SyncAuthService::class);
-        $token = $auth->createSessionToken($user, $device->id)['token'];
+        $token = $this->createNativeSessionToken($user, $device)['token'];
         try {
             DB::transaction(function () use ($auth, $user) {
                 $this->assertSame(1, $auth->revokeDevice($user, 'rollback'));

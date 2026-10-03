@@ -35,7 +35,7 @@ class SyncChangeJournalTest extends TestCase
         $this->seed(CollectionSeeder::class);
         $this->user = User::factory()->create(['storage_quota_bytes' => 104857600]);
         $this->device = $this->createDevice($this->user, 'device-a');
-        $this->token = app(SyncAuthService::class)->createSessionToken($this->user, $this->device->id)['token'];
+        $this->token = $this->createNativeSessionToken($this->user, $this->device)['token'];
         $this->storage = app(SyncStorageService::class);
     }
 
@@ -117,13 +117,13 @@ class SyncChangeJournalTest extends TestCase
             ->assertStatus(400)->assertJsonPath('error', 'invalid_cursor');
 
         $secondDevice = $this->createDevice($this->user, 'device-b');
-        $otherToken = app(SyncAuthService::class)->createSessionToken($this->user, $secondDevice->id)['token'];
+        $otherToken = $this->createNativeSessionToken($this->user, $secondDevice)['token'];
         $this->withToken($otherToken)->postJson(self::ACK, ['cursor' => $cursor])
             ->assertStatus(400)->assertJsonPath('error', 'invalid_cursor');
 
         $other = User::factory()->create();
         $otherDevice = $this->createDevice($other, 'device-a');
-        $otherToken = app(SyncAuthService::class)->createSessionToken($other, $otherDevice->id)['token'];
+        $otherToken = $this->createNativeSessionToken($other, $otherDevice)['token'];
         $this->withToken($otherToken)->getJson(self::FEED.'?'.http_build_query(['cursor' => $cursor]))
             ->assertStatus(400)->assertJsonPath('error', 'invalid_cursor');
     }
@@ -133,8 +133,7 @@ class SyncChangeJournalTest extends TestCase
         $this->withToken($this->token)->getJson(self::FEED.'?cursor=not-a-cursor')
             ->assertStatus(400)->assertJsonPath('error', 'invalid_cursor');
         $unbound = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
-        $this->withToken($unbound)->getJson(self::FEED)
-            ->assertStatus(409)->assertJsonPath('error', 'device_required');
+        $this->withToken($unbound)->getJson(self::FEED)->assertUnauthorized();
     }
 
     public function test_wipe_changes_generation_and_invalidates_old_cursors_and_acknowledgements(): void

@@ -9,7 +9,6 @@ use App\Models\Library\LibrarySnapshot;
 use App\Models\User;
 use App\Services\Library\MetadataExtractor;
 use App\Services\Library\PublicPageFetcher;
-use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -70,7 +69,7 @@ class LibraryWebTest extends TestCase
     public function test_api_token_still_works_for_native_client(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
         config(['library.billing_enabled' => false]);
 
         $this->withToken($token)->postJson('/api/library/links', ['url' => 'https://example.com/ext'])

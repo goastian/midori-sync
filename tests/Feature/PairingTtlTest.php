@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\User;
-use App\Services\SyncAuthService;
 use App\Services\SyncIdentityService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -22,8 +21,7 @@ class PairingTtlTest extends TestCase
 
         config(['services.sync.local_dev' => true]);
         $user = User::factory()->create(['authentik_issuer' => SyncIdentityService::DEVELOPMENT_ISSUER]);
-        $token = app(SyncAuthService::class)
-            ->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
 
         $response = $this->withToken($token)->postJson('/api/v1/pair');
         $response->assertOk();
@@ -32,7 +30,7 @@ class PairingTtlTest extends TestCase
         $this->assertDatabaseHas('sync_pairing_codes', ['token_hash' => hash('sha256', $pairing)]);
 
         Carbon::setTestNow(now()->addSeconds(61));
-        $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $pairing, 'device_name' => 'Late device', 'native_client' => true])
+        $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $pairing, 'device_name' => 'Late device'])
             ->assertNotFound();
 
         Carbon::setTestNow();

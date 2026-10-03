@@ -33,7 +33,7 @@ class NativeCryptoTest extends TestCase
         $this->user = User::factory()->create(['authentik_issuer' => SyncIdentityService::DEVELOPMENT_ISSUER]);
         $code = app(SyncPairingService::class)->generate($this->user)['pairing_token'];
         $paired = $this->postJson('/api/v1/pair/redeem', [
-            'pairing_token' => $code, 'device_name' => 'Native fixture', 'native_client' => true,
+            'pairing_token' => $code, 'device_name' => 'Native fixture',
         ])->assertCreated()->assertJsonPath('user.id', (string) $this->user->id);
         $this->token = $paired->json('token');
         $this->withToken($this->token);
@@ -119,7 +119,7 @@ class NativeCryptoTest extends TestCase
         $this->assertSame($state, $this->state());
     }
 
-    public function test_incompatible_sessions_require_explicit_revocation_and_cannot_be_reissued(): void
+    public function test_incompatible_sessions_require_explicit_revocation_and_new_pairing_uses_native_protocol(): void
     {
         $legacy = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
         $state = $this->state();
@@ -133,10 +133,13 @@ class NativeCryptoTest extends TestCase
         $this->withToken($this->token);
         $code = app(SyncPairingService::class)->generate($this->user)['pairing_token'];
         $devices = Device::count();
-        $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Old browser'])
-            ->assertUnprocessable()->assertJsonValidationErrors('native_client');
-        $this->assertDatabaseHas('sync_pairing_codes', ['token_hash' => hash('sha256', $code)]);
-        $this->assertSame($devices, Device::count());
+        $result = $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'New browser'])
+            ->assertCreated()->json();
+        $this->assertDatabaseHas('sync_sessions', [
+            'token_hash' => hash('sha256', $result['token']), 'protocol_version' => 2,
+        ]);
+        $this->assertDatabaseMissing('sync_pairing_codes', ['token_hash' => hash('sha256', $code)]);
+        $this->assertSame($devices + 1, Device::count());
     }
 
     public function test_existing_encrypted_data_or_legacy_keys_require_a_migration(): void
@@ -266,7 +269,7 @@ class NativeCryptoTest extends TestCase
     public function test_legacy_foreign_expired_or_unbound_sessions_cannot_access_native_keys(): void
     {
         $legacy = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
-        $this->withToken($legacy)->getJson('/api/v1/crypto/state')->assertStatus(426);
+        $this->withToken($legacy)->getJson('/api/v1/crypto/state')->assertUnauthorized();
         $this->withToken($this->token);
         $session = SyncSession::where('token_hash', hash('sha256', $this->token))->firstOrFail();
         $other = User::factory()->create();

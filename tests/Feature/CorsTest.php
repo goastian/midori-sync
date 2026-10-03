@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\User;
-use App\Services\SyncAuthService;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -32,7 +31,7 @@ class CorsTest extends TestCase
     public function test_allowed_origin_is_echoed(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
 
         $response = $this->withToken($token)
             ->withHeaders(['Origin' => 'https://dashboard.example.com'])
@@ -49,7 +48,7 @@ class CorsTest extends TestCase
     public function test_pattern_origin_is_echoed(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
 
         $response = $this->withToken($token)
             ->withHeaders(['Origin' => 'https://client-abc123.example.com'])
@@ -65,7 +64,7 @@ class CorsTest extends TestCase
     public function test_disallowed_origin_gets_no_cors_headers(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
 
         $response = $this->withToken($token)
             ->withHeaders(['Origin' => 'https://evil.example.com'])
@@ -77,7 +76,7 @@ class CorsTest extends TestCase
     public function test_request_without_origin_has_no_cors_headers(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
 
         $response = $this->withToken($token)->getJson('/api/v1/devices');
 

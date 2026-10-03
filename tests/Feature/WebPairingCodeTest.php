@@ -41,7 +41,7 @@ class WebPairingCodeTest extends TestCase
         $paired = $this->postJson('/api/v1/pair/redeem', [
             'pairing_token' => $code,
             'device_name' => 'Midori Desktop',
-            'native_client' => true,
+
             'native_refresh' => true,
         ])->assertCreated()->assertJsonPath('identity.subject', $user->authentik_id);
         $this->assertNotEmpty($paired->json('refresh_token'));
@@ -49,7 +49,7 @@ class WebPairingCodeTest extends TestCase
         $this->postJson('/api/v1/pair/redeem', [
             'pairing_token' => $code,
             'device_name' => 'Midori Desktop',
-            'native_client' => true,
+
         ])->assertNotFound();
     }
 
@@ -140,7 +140,7 @@ class WebPairingCodeTest extends TestCase
         $this->postJson('/api/v1/pair/redeem', [
             'pairing_token' => $code,
             'device_name' => 'Midori Desktop',
-            'native_client' => true,
+
         ])->assertCreated()->assertJsonPath('identity.issuer', $issuer);
     }
 

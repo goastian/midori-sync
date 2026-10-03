@@ -31,7 +31,7 @@ class NativeAccountTest extends TestCase
         $user = $this->nativeUser(['authentik_id' => 'usuario-ñ']);
         $code = app(SyncPairingService::class)->generate($user)['pairing_token'];
         $paired = $this->postJson('/api/v1/pair/redeem', [
-            'pairing_token' => $code, 'device_name' => 'Perfil A', 'native_client' => true,
+            'pairing_token' => $code, 'device_name' => 'Perfil A',
         ])->assertCreated()->assertJsonPath('identity.subject', 'usuario-ñ')
             ->assertJsonPath('identity.issuer', SyncIdentityService::DEVELOPMENT_ISSUER)
             ->assertJsonPath('identity.kind', 'development');
@@ -52,7 +52,7 @@ class NativeAccountTest extends TestCase
             $user = $this->nativeUser(['authentik_issuer' => $issuer]);
             $code = app(SyncPairingService::class)->generate($user)['pairing_token'];
             $this->postJson('/api/v1/pair/redeem', [
-                'pairing_token' => $code, 'device_name' => 'Native', 'native_client' => true,
+                'pairing_token' => $code, 'device_name' => 'Native',
             ])->assertStatus(409);
             $this->assertDatabaseHas('sync_pairing_codes', ['user_id' => $user->id, 'token_hash' => hash('sha256', $code)]);
         }
@@ -64,11 +64,11 @@ class NativeAccountTest extends TestCase
     {
         $user = $this->nativeUser();
         $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
-        $this->withToken($token)->getJson('/api/v1/account')->assertStatus(409)->assertJsonPath('error', 'device_required');
+        $this->withToken($token)->getJson('/api/v1/account')->assertUnauthorized();
         $other = $this->nativeUser();
         $device = Device::create(['user_id' => $other->id, 'device_id' => 'foreign', 'name' => 'Foreign', 'type' => 'desktop']);
         SyncSession::where('token_hash', hash('sha256', $token))->update(['device_id' => $device->id]);
-        $this->getJson('/api/v1/account')->assertStatus(409)->assertJsonPath('error', 'device_required');
+        $this->getJson('/api/v1/account')->assertUnauthorized();
     }
 
     public function test_production_never_treats_the_development_issuer_as_oidc(): void
@@ -80,7 +80,7 @@ class NativeAccountTest extends TestCase
             ->assertJsonPath('authentication.development', false)
             ->assertJsonPath('authentication.issuer', 'https://accounts.example.invalid/application/o/midori/');
         $code = app(SyncPairingService::class)->generate($user)['pairing_token'];
-        $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Native', 'native_client' => true])
+        $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Native'])
             ->assertStatus(409)->assertJsonPath('error', 'identity_issuer_mismatch');
         $this->assertDatabaseCount('sync_sessions', 0);
     }
@@ -90,7 +90,7 @@ class NativeAccountTest extends TestCase
         config(['services.sync.local_dev' => false, 'services.authentik.issuer' => 'https://accounts.example.invalid/application/o/midori/']);
         $user = $this->nativeUser(['authentik_issuer' => config('services.authentik.issuer')]);
         $code = app(SyncPairingService::class)->generate($user)['pairing_token'];
-        $response = $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Native', 'native_client' => true])
+        $response = $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Native'])
             ->assertCreated()->assertJsonPath('identity.kind', 'oidc')
             ->assertJsonPath('identity.subject', $user->authentik_id)
             ->assertJsonPath('identity.issuer', config('services.authentik.issuer'));

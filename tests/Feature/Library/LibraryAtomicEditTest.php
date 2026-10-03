@@ -5,7 +5,6 @@ namespace Tests\Feature\Library;
 use App\Models\Library\LibraryCollection;
 use App\Models\Library\LibraryLink;
 use App\Models\User;
-use App\Services\SyncAuthService;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -18,7 +17,7 @@ class LibraryAtomicEditTest extends TestCase
     public function test_api_and_web_edits_roll_back_fields_tags_and_feed_together(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
         $api = LibraryLink::create(['user_id' => $user->id, 'url' => 'https://example.com/api', 'title' => 'Original API']);
         $web = LibraryLink::create(['user_id' => $user->id, 'url' => 'https://example.com/web', 'title' => 'Original Web']);
         $before = DB::table('library_link_changes')->count();
@@ -60,7 +59,7 @@ SQL);
     public function test_bulk_edit_rolls_back_all_links_when_one_write_fails(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
         $first = LibraryLink::create(['id' => '00000000-0000-4000-8000-000000000001',
             'user_id' => $user->id, 'url' => 'https://example.com/first']);
         $second = LibraryLink::create(['id' => '00000000-0000-4000-8000-000000000002',
@@ -98,7 +97,7 @@ SQL);
     public function test_collection_validation_does_not_accept_another_account(): void
     {
         $user = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = $this->createNativeSessionToken($user)['token'];
         $other = User::factory()->create();
         $collection = LibraryCollection::create(['user_id' => $other->id, 'name' => 'Private']);
         $link = LibraryLink::create(['user_id' => $user->id, 'url' => 'https://example.com/owned']);

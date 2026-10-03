@@ -8,7 +8,6 @@ use App\Models\Library\LibraryLink;
 use App\Models\User;
 use App\Services\Library\LinkMutationService;
 use App\Services\Library\LinkWriter;
-use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
@@ -29,7 +28,7 @@ class NativeSaveTest extends TestCase
         Bus::fake();
         config(['library.billing_enabled' => false]);
         $this->user = User::factory()->create();
-        $this->token = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
+        $this->token = $this->createNativeSessionToken($this->user)['token'];
     }
 
     public function test_replay_returns_the_original_small_receipt_after_edit_and_deletion(): void
@@ -121,7 +120,7 @@ class NativeSaveTest extends TestCase
         $collection->delete();
         $this->withToken($this->token)->postJson('/api/library/v1/saves', $data)->assertCreated()->assertExactJson($first->json());
         $other = User::factory()->create();
-        $token = app(SyncAuthService::class)->createSessionToken($other)['token'];
+        $token = $this->createNativeSessionToken($other)['token'];
         unset($data['library_collection_id']);
         $second = $this->withToken($token)->postJson('/api/library/v1/saves', $data)->assertCreated();
         $this->assertNotSame($first->json('link_id'), $second->json('link_id'));

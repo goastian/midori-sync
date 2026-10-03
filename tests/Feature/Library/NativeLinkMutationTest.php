@@ -7,7 +7,6 @@ use App\Models\Library\LibraryCollection;
 use App\Models\Library\LibraryLink;
 use App\Models\User;
 use App\Services\Library\PublicPageFetcher;
-use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
@@ -20,7 +19,7 @@ class NativeLinkMutationTest extends TestCase
 
     private function token(User $user): string
     {
-        return app(SyncAuthService::class)->createSessionToken($user)['token'];
+        return $this->createNativeSessionToken($user)['token'];
     }
 
     private function save(string $token, string $url, ?string $operationId = null): array

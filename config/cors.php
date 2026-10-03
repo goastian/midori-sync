@@ -34,7 +34,7 @@ return [
     // Laravel's built-in HandleCors middleware reads `paths`. We set it
     // to an empty array so HandleCors becomes a no-op for every route,
     // and our `App\Http\Middleware\SyncApiCors` is the single
-    // source of truth for CORS policy on `/api/ext` and `/api/v1`.
+    // source of truth for CORS policy on `/api/v1`.
     'paths' => [],
 
     'allowed_origins' => $origins,

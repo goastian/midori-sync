@@ -33,8 +33,7 @@ class PairingFlowTest extends TestCase
 
         config(['services.sync.local_dev' => true]);
         $this->user = User::factory()->create(['authentik_issuer' => SyncIdentityService::DEVELOPMENT_ISSUER]);
-        $this->token = app(SyncAuthService::class)
-            ->createSessionToken($this->user)['token'];
+        $this->token = $this->createNativeSessionToken($this->user)['token'];
     }
 
     public function test_generate_returns_pairing_token_for_authenticated_user(): void
@@ -56,13 +55,6 @@ class PairingFlowTest extends TestCase
         $this->postJson('/api/v1/pair')->assertStatus(401);
     }
 
-    public function test_retired_extension_routes_are_absent(): void
-    {
-        $this->getJson('/api/ext/auth/start')->assertNotFound();
-        $this->postJson('/api/ext/pair')->assertNotFound();
-        $this->postJson('/api/ext/storage/bookmarks')->assertNotFound();
-    }
-
     public function test_redeem_exchanges_pairing_token_for_sync_token_and_creates_device(): void
     {
         $generate = $this->withToken($this->token)
@@ -74,7 +66,7 @@ class PairingFlowTest extends TestCase
         $redeem = $this->postJson('/api/v1/pair/redeem', [
             'pairing_token' => $pairingToken,
             'device_name' => 'New Device',
-            'native_client' => true,
+
             'device_type' => 'mobile',
         ]);
 
@@ -102,7 +94,7 @@ class PairingFlowTest extends TestCase
         $this->postJson('/api/v1/pair/redeem', [
             'pairing_token' => 'totally-bogus',
             'device_name' => 'Whatever',
-            'native_client' => true,
+
         ])->assertStatus(404);
     }
 
@@ -115,13 +107,13 @@ class PairingFlowTest extends TestCase
         $this->postJson('/api/v1/pair/redeem', [
             'pairing_token' => $pairingToken,
             'device_name' => 'Device A',
-            'native_client' => true,
+
         ])->assertCreated();
 
         $this->postJson('/api/v1/pair/redeem', [
             'pairing_token' => $pairingToken,
             'device_name' => 'Device A',
-            'native_client' => true,
+
         ])->assertStatus(404);
     }
 
@@ -140,7 +132,7 @@ class PairingFlowTest extends TestCase
             $redeemed = $this->postJson('/api/v1/pair/redeem', [
                 'pairing_token' => strtolower(implode('-', str_split($code, 4))),
                 'device_name' => 'Midori Desktop',
-                'native_client' => true,
+
             ])->assertCreated();
             $devices[] = $redeemed->json('device.id');
             $this->withToken($redeemed->json('token'))->getJson('/api/v1/sync/collections/bookmarks/changes')->assertOk();
@@ -152,9 +144,9 @@ class PairingFlowTest extends TestCase
     {
         $code = $this->withToken($this->token)->postJson('/api/v1/pair')->assertOk()->json('pairing_token');
         DB::table('sync_pairing_codes')->update(['expires_at' => now()->subSecond()]);
-        $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Expired', 'native_client' => true])
+        $this->postJson('/api/v1/pair/redeem', ['pairing_token' => $code, 'device_name' => 'Expired'])
             ->assertNotFound();
-        $this->assertDatabaseCount('devices', 0);
+        $this->assertDatabaseCount('devices', 1);
         $this->assertDatabaseCount('sync_sessions', 1);
     }
 }

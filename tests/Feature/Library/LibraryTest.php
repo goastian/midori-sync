@@ -7,7 +7,6 @@ use App\Models\Library\BillingEvent;
 use App\Models\Library\LibraryCollection;
 use App\Models\Library\LibraryLink;
 use App\Models\User;
-use App\Services\SyncAuthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
@@ -28,7 +27,7 @@ class LibraryTest extends TestCase
         config(['library.billing_enabled' => false]);
         config(['queue.default' => 'sync']);
         $this->user = User::factory()->create();
-        $this->token = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
+        $this->token = $this->createNativeSessionToken($this->user)['token'];
     }
 
     public function test_store_and_dedupe_link(): void

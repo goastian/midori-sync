@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Models\Device;
 use App\Models\User;
-use App\Services\SyncAuthService;
 use App\Services\SyncStorageService;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -34,7 +33,7 @@ class SyncOperationsTest extends TestCase
         $this->user = User::factory()->create(['storage_quota_bytes' => 104857600]);
         foreach (['a', 'b'] as $id) {
             $device = Device::create(['user_id' => $this->user->id, 'device_id' => $id, 'name' => $id, 'type' => 'desktop']);
-            $token = app(SyncAuthService::class)->createSessionToken($this->user, $device->id)['token'];
+            $token = $this->createNativeSessionToken($this->user, $device)['token'];
             if ($id === 'a') {
                 $this->token = $token;
             } else {

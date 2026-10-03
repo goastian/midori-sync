@@ -116,7 +116,7 @@ class HistoryClearTest extends TestCase
         $code = app(SyncPairingService::class)->generate($this->user)['pairing_token'];
 
         return $this->postJson('/api/v1/pair/redeem', [
-            'pairing_token' => $code, 'device_name' => $name, 'native_client' => true,
+            'pairing_token' => $code, 'device_name' => $name,
         ])->assertCreated()->json('token');
     }
 

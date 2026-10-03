@@ -41,6 +41,8 @@ return [
         'client_secret' => env('AUTHENTIK_CLIENT_SECRET'),
         'base_url' => env('AUTHENTIK_BASE_URL'),
         'redirect' => env('AUTHENTIK_REDIRECT_URI'),
+        'native_client_id' => env('AUTHENTIK_NATIVE_CLIENT_ID'),
+        'native_discovery_url' => env('AUTHENTIK_NATIVE_DISCOVERY_URL'),
     ],
 
     'sync' => [
@@ -54,7 +56,6 @@ return [
         'unauth_rate_limit' => env('SYNC_UNAUTH_RATE_LIMIT', 30),
         'http_compression' => env('SYNC_HTTP_COMPRESSION', false),
         'http_compression_min_bytes' => env('SYNC_HTTP_COMPRESSION_MIN_BYTES', 1024),
-        'oauth_state_ttl' => env('SYNC_OAUTH_STATE_TTL', 600),
         'pairing_ttl' => env('SYNC_PAIRING_TTL', 300),
     ],
 
