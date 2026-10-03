@@ -18,6 +18,7 @@ class CollectionSeeder extends Seeder
             ['name' => 'midori-privacy', 'description' => 'Midori Privacy filter lists and site toggles'],
             ['name' => 'devices', 'description' => 'Connected device metadata'],
             ['name' => 'passwords', 'description' => 'Encrypted password entries'],
+            ['name' => 'credit-cards', 'description' => 'Encrypted payment card entries'],
         ];
 
         DB::table('collections')->upsert($collections, ['name'], ['description']);

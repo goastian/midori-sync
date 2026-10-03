@@ -10,10 +10,8 @@ synthetic accounts through `sync:dev`.
 The machine-readable [OpenAPI 3.1 contract](native-sync.openapi.json) describes
 the implemented native-client profile, including session revocation, request
 and response schemas, per-operation outcomes, byte limits and reset behavior.
-It does not declare future OAuth/PKCE or legacy extension routes as
-implemented native endpoints. Link has a separate [save receipt contract](native-link-api.md)
-and [OpenAPI document](native-link.openapi.json). Its default server is relative to the chosen
-instance; the local and official URLs are also listed explicitly. The format
+The native OIDC exchange is available when a public Authentik client is configured; Desktop completes authorization code with PKCE before calling it.
+The retired extension routes have been removed. The format
 follows the [OpenAPI specification](https://spec.openapis.org/oas/v3.1.0.html).
 
 ## Routes
@@ -23,10 +21,13 @@ follows the [OpenAPI specification](https://spec.openapis.org/oas/v3.1.0.html).
 | GET | `/capabilities` | Public capability and size discovery, no credentials required |
 | POST | `/pair` | Issue a short-lived code from an authenticated account |
 | POST | `/pair/redeem` | Consume a code atomically and register a device/session |
+| POST | `/auth/native-token` | Verify a public-client OIDC authorization and issue a renewable native device session |
 | GET | `/account` | Return the session's bound account identity, device and expiry |
 | POST | `/auth/refresh` | Rotate renewable credentials or recover the last response with the same operation UUID |
 | DELETE | `/auth/refresh` | Revoke the session using current or consumed renewal proof, including after access expiry |
 | DELETE | `/auth/token` | Revoke the session using a valid access bearer |
+| POST | `/sync/notifications/ticket` | Issue a one-use, 30-second ticket for the change-notification stream |
+| GET | `/sync/notifications/stream` | Receive account-scoped change hints over a dedicated event stream |
 | GET | `/sync/collections/{name}/changes` | Ordered change page; optional `cursor` and `limit` |
 | POST | `/sync/collections/{name}/ack` | Acknowledge an applied page with `{ "cursor": "..." }` |
 | POST | `/sync/collections/{name}/operations` | Conditional, idempotent writes with individual outcomes |
@@ -44,14 +45,27 @@ device receive `409 device_required`. Responses use `Cache-Control: no-store`.
 Pairing codes are stored as SHA-256 hashes, expire after the configured TTL and
 are consumed in the same transaction that creates the device and session.
 Device names are labels, not identity keys. Each redemption receives a new UUID.
-The temporary `/api/ext/pair` routes use the same controller as `/api/v1`.
+Pairing is available through `/api/v1/pair` and `/api/v1/pair/redeem`.
 Pairing establishes a session; it does not transfer E2EE keys.
+
+The notification ticket endpoint requires a valid native V2 bearer bound to an
+owned device. It returns `version`, `ticket` and `expires_at` with `no-store`.
+Only the ticket hash is stored; issuing another ticket replaces the prior one.
+Connect to `/sync/notifications/stream` with `Authorization: MidoriNotification
+<ticket>`. The one-use ticket is consumed on connection. A `changed` event
+contains only `{}`; clients then read the normal Sync feeds. The stream
+sends a heartbeat every 20 seconds and closes after 15 minutes, so clients must
+obtain a fresh ticket before reconnecting. The production nginx route proxies
+this stream to a supervised Artisan process outside PHP-FPM. Desktop listens
+while background Sync is eligible and retains change-feed polling as a
+fallback.
+
+Accounts with encrypted data from the retired client remain protected against accidental V2 activation. Stored account data is not erased by removing the extension-specific migration API.
 
 For an authenticated web account, open **Dashboard → Connect Midori Desktop**
 or **Devices → Generate pairing code**. The web-only `POST /devices/pairing-code`
 uses the session and CSRF protection to return the same one-use, five-minute
-code without exposing an API bearer token to the page. Enter it in the Sync and
-Link popup in Midori Desktop and select **Connect account**. The page shows a
+code without exposing an API bearer token to the page. Enter it in the Sync popup in Midori Desktop and select **Connect account**. The page shows a
 countdown and clears the code when it expires. Code generation is limited to
 five requests per minute per account. In local development, `sync:dev pair`
 remains available for the synthetic account when web OAuth is not configured.
@@ -66,17 +80,12 @@ Capabilities include `account_version: 1` and `authentication` with `pairing`,
 `development` and nullable `issuer`. The desktop must check these separately
 from `native_ready`; the latter still remains false.
 
-The optional `link` capability advertises only the implemented save receipt
-version and its request/receipt limits. It does not advertise a Link feed,
-conditional edits, undo or a ready native popup.
-
-Native redemption includes `native_client: true`. Before consuming the code or
-creating a device/session, the server checks the user's stored issuer against
-the configured issuer. A successful response includes `identity` with `issuer`,
-`subject` and `kind` (`development` or `oidc`). Legacy redemption remains
-available temporarily without this flag, until the account activates native
-cryptography. Native sessions store `protocol_version: 2`; existing/legacy
-sessions remain version 1. The native pairing response also returns the user ID
+Before consuming the code or creating a device/session, the server checks the
+user's stored issuer against the configured issuer. A successful response includes
+`identity` with `issuer`, `subject` and `kind` (`development` or `oidc`). Native
+sessions store `protocol_version: 2`; previously issued version 1 sessions
+remain stored until expiry or revocation but their bearer tokens receive HTTP 401
+on current Sync routes. The native pairing response also returns the user ID
 as a string. These session versions are server-issued metadata, not a request
 header that an old session can supply to claim compatibility.
 
@@ -114,10 +123,10 @@ the same development issuer.
 ### Renewable native sessions
 
 `authentication.refresh.version: 1` advertises the implemented backend contract,
-not client readiness. Pairing must explicitly include both `native_client: true`
-and `native_refresh: true`. Otherwise it retains access-only credentials. Native
-Desktop does not request renewal yet; its durable recovery integration remains
-pending. Old sessions cannot be upgraded by presenting their access token.
+not client readiness. Pairing must explicitly include `native_refresh: true`.
+Otherwise it retains access-only credentials. Native Desktop requests renewal
+when the server advertises it. Old sessions cannot be upgraded by presenting
+their access token.
 
 Renewable pairing returns `refresh_version`, `refresh_token` and
 `refresh_expires_at` in addition to its normal response. The renewal secret is
@@ -146,7 +155,7 @@ commits deletion of that session and its receipts, then returns
 `DELETE /auth/refresh` accepts exactly `refresh_token`. Current or consumed
 proof revokes the same family, including when access expired. Unknown or already
 revoked proof also returns an empty 204. Access-token revocation, device deletion
-(web/v1/extension) and audit revocation cascade to all renewal receipts. Scheduled
+(web/v1) and audit revocation cascade to all renewal receipts. Scheduled
 cleanup retains an expired access token while its renewal authorization lives.
 The audit page counts such sessions as active and shows the authorization end
 date so they remain revocable.
@@ -232,57 +241,8 @@ records, including tombstones, require their current revision. Deletion uses
 server never decrypts record contents. In native mode it validates the public
 envelope metadata described below before accepting a new operation.
 
-Batches contain 1–100 operations and at most 4 MiB of JSON. Each payload is
-limited by `services.sync.max_record_size` (default 256 KiB). The server processes
-items in order within one account transaction. A successful HTTP response
-contains `generation` and `results`; it does not mean every item succeeded.
-
-| Item status | Meaning and client action |
-| --- | --- |
-| `applied` | Durable receipt with the new `revision`; remove that outbox operation |
-| `conflict` | Current revision differs; download/reconcile and submit a new operation ID |
-| `idempotency_conflict` | That ID was used with different normalized contents or another device; investigate the outbox |
-| `invalid` | Item schema or payload size is invalid; correct it before retrying |
-| `quota_exceeded` | Capacity is insufficient; keep pending and retry after freeing capacity |
-
-Every result has its input `index`; validated operations also include their ID.
-Successful and revision-conflict receipts are persisted atomically with changes.
-Replaying the same operation returns its receipt without another revision or
-change entry. A quota rejection is not cached, so the same operation can succeed
-after capacity is freed. IDs are scoped to a collection generation, with the
-device included in the fingerprint. A stale generation rejects the entire batch
-with `409 reset_required` before it can change records.
-
-Quota enforcement measures active payload bytes at one time boundary for the
-transaction. Equal-size replacements, shrinking and deletions remain possible
-when the account is already above its quota. The legacy API uses the same check;
-its batch quota failure retains the whole-batch HTTP 403 behavior.
 
 ## Storage and transition
-
-### Conditional key-bundle storage
-
-`POST /api/v1/crypto/keys` accepts `encrypted_bundle` and an optional integer
-`expected_version`. Zero requires that no bundle exists; a positive value must
-match the revision returned by `GET /api/v1/crypto/keys`. A mismatch returns
-`409 key_version_conflict` without changing the bundle. A successful write
-increments its revision. Reads, writes and conflicts use `Cache-Control: no-store`.
-The capability is advertised as `conditional_key_bundle`.
-
-Key-bundle writes acquire the same account row lock as data writes and full
-erasure, before reading the current bundle. Competing first writes therefore
-cannot both satisfy version zero, and legacy writes cannot lose increments.
-The PostgreSQL integer revision is bounded at 2147483647; further writes return
-`409 key_version_exhausted` without overwriting the last bundle.
-
-The precondition remains optional for accounts still in legacy mode. This revision is a
-storage counter, not a cryptographic format or key identifier, and resets if
-the account's data is erased. It does not implement a migration lock, replay
-protection across an erase/recreate cycle, multiple key generations, or safe
-V2 activation by itself. Native clients use the separate state/registry below.
-After native activation, writes to the old key-bundle endpoint return
-`426 client_upgrade_required`, even from a native session. The ciphertext remains opaque;
-the server cannot verify that a user will be able to decrypt a submitted bundle.
 
 ### Native key registry and write barrier
 
@@ -380,7 +340,7 @@ remain pending. The server exposes no unsafe key-deletion shortcut.
 
 `DELETE /sync/data` takes the current `crypto` object. It removes Sync records,
 bundles, receipts and acknowledgements, and rotates both the key-state epoch
-and collection generations. It does not erase Link's library. A native account
+and collection generations. A native account
 stays native with no active key, and can activate a new key against the new
 epoch. Old version-zero creation requests cannot pass the new epoch, and a
 wipe never restores legacy write access. The explicit authenticated dashboard
@@ -407,14 +367,12 @@ account data wipe deletes payloads and rotates stream generations. The journal
 does not yet prune history or tombstones; implement retention, snapshot
 compaction and acknowledgement/generation rules before production rollout.
 
-Legacy accounts still permit unconditional writes. Fresh-account native
-activation now closes those paths transactionally, but conversion and cutover
-of populated legacy accounts remain pending. Also pending: scoped renewable
-sessions, completion/pruning of rotations, and Link's independent change feed
-and API contract. The Desktop pairing/recovery flow is implemented; native
-OAuth/PKCE and complete populated-account migration remain pending.
+Legacy accounts still permit unconditional writes through the old API. Fresh-account native
+activation closes those paths transactionally. The extension-specific conversion
+routes were retired; populated older accounts remain blocked from V2 activation
+until their data is recovered through a verified migration outside the shipped client.
 The complete Desktop migration and popup are tracked in the parent repository's
-`docs/plan-integracion-sync-link-nativo.md`.
+`docs/plan-integracion-sync-nativo.md`.
 
 ## Validation
 
@@ -426,8 +384,7 @@ and `artifacts/sync-openapi-routes-check.log`. Another 38 schema checks passed
 against independent libsodium-generated envelopes and protocol examples
 (`artifacts/sync-openapi-fixtures.log`). A temporary copy of the existing PHP
 generator used `base_revision: "0"`: the original wide-counter crypto fixture
-correctly falls outside the current API revision range. Local-storage and Link
-envelopes are rejected as Sync collection writes. These checks do not replace
+correctly falls outside the current API revision range. Local-storage envelopes are rejected as Sync collection writes. These checks do not replace
 AEAD verification, runtime response validation or the PostgreSQL tests below.
 
 `SyncChangeJournalTest`, `SyncOperationsTest`, `EnforceQuotaTest` and existing

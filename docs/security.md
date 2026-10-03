@@ -113,15 +113,6 @@ The dashboard issues a short-lived, single-use code for the native client via `/
 - `Origin` echo only if present in the allowlist.
 - Expected origins: configured dashboard and API clients. Local defaults do not include browser-extension origins.
 
-### 4.3 Link fetches
-
-Metadata and HTML snapshot jobs use `PublicPageFetcher`: only HTTP(S) targets
-without URL credentials on standard ports are accepted. Each redirect is
-rechecked, DNS A/AAAA answers must all be public, and curl pins one validated
-address without an ambient proxy. The decompressed response is bounded while
-streaming (5 MiB for metadata, 8 MiB for HTML snapshots). Stored snapshots are
-sanitized before use. These controls do not cover future Chromium-based PDF or
-screenshot workers; those need their own network isolation.
 
 ## 5. Rate Limiting and Quotas
 

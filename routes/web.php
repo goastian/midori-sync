@@ -5,7 +5,6 @@ use App\Http\Controllers\Web\AuditController;
 use App\Http\Controllers\Web\CollectionController;
 use App\Http\Controllers\Web\DashboardController;
 use App\Http\Controllers\Web\DeviceController;
-use App\Http\Controllers\Web\LibraryController;
 use App\Http\Controllers\Web\SettingsController;
 use App\Models\User;
 use App\Services\SyncIdentityService;
@@ -62,18 +61,6 @@ Route::middleware('auth')->group(function () {
     Route::delete('/settings/data', [SettingsController::class, 'deleteAllData'])->name('settings.destroy-data');
 
     Route::get('/audit', [AuditController::class, 'index'])->name('audit.index');
-    Route::get('/library', [LibraryController::class, 'index'])->name('library.index');
-    Route::post('/library', [LibraryController::class, 'store'])->name('library.store');
-    Route::get('/library/billing', [LibraryController::class, 'billing'])->name('library.billing');
-    Route::get('/library/{id}', [LibraryController::class, 'show'])->name('library.show');
-    Route::patch('/library/{id}', [LibraryController::class, 'update'])->name('library.update');
-    Route::delete('/library/{id}', [LibraryController::class, 'destroy'])->name('library.destroy');
-    Route::post('/library/{id}/refresh', [LibraryController::class, 'refresh'])->name('library.refresh');
-    Route::post('/library/{id}/preserve', [LibraryController::class, 'preserve'])->name('library.preserve');
-    Route::post('/library/{id}/highlights', [LibraryController::class, 'storeHighlight'])->name('library.highlights.store');
-    Route::delete('/library/{id}/highlights/{hid}', [LibraryController::class, 'destroyHighlight'])->name('library.highlights.destroy');
-    Route::post('/library/{id}/shares', [LibraryController::class, 'storeShare'])->name('library.shares.store');
-    Route::delete('/library/{id}/shares/{sid}', [LibraryController::class, 'destroyShare'])->name('library.shares.destroy');
     Route::delete('/audit/sessions/{id}', [AuditController::class, 'revoke'])->name('audit.sessions.revoke');
     Route::delete('/audit/sessions', [AuditController::class, 'revokeAll'])->name('audit.sessions.revoke-all');
 });

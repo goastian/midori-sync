@@ -13,6 +13,7 @@ class User extends Authenticatable
 
     protected $fillable = [
         'authentik_id',
+        'authentik_issuer',
         'email',
         'name',
         'avatar_url',
@@ -21,6 +22,7 @@ class User extends Authenticatable
 
     protected $hidden = [
         'authentik_id',
+        'authentik_issuer',
     ];
 
     protected function casts(): array

@@ -8,13 +8,11 @@ use App\Http\Controllers\Api\V1\NativeOidcController;
 use App\Http\Controllers\Api\V1\PairingController;
 use App\Http\Controllers\Api\V1\RefreshSessionController;
 use App\Http\Controllers\Api\V1\SyncChangesController;
+use App\Http\Controllers\Api\V1\SyncNotificationController;
 use App\Http\Middleware\SyncApiCors;
 use App\Http\Middleware\TrackDevice;
 use App\Http\Middleware\ValidateSyncToken;
 use Illuminate\Support\Facades\Route;
-
-// ─── Library API (servicio monetizable, billing en payments.astian.org) ──
-require __DIR__.'/library.php';
 
 // ─── API v1 — Midori Sync Protocol ─────────────────────────────────────
 Route::prefix('v1')->middleware(SyncApiCors::class)->group(function () {
@@ -38,6 +36,7 @@ Route::prefix('v1')->middleware(SyncApiCors::class)->group(function () {
 
         // Sync info
         Route::get('/sync/collections/{name}/changes', [SyncChangesController::class, 'index']);
+        Route::post('/sync/notifications/ticket', [SyncNotificationController::class, 'ticket'])->middleware('throttle:sync');
         Route::post('/sync/collections/{name}/ack', [SyncChangesController::class, 'acknowledge']);
         Route::post('/sync/collections/{name}/operations', [SyncChangesController::class, 'operations']);
         Route::post('/sync/collections/history/clear', [SyncChangesController::class, 'clearHistory']);

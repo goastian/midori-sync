@@ -1,6 +1,6 @@
 # Midori Sync
 
-Self-hosted synchronization and Link service for Midori Desktop, with end-to-end encrypted Sync records, a Laravel backend, and a web dashboard.
+Self-hosted synchronization service for Midori Desktop, with end-to-end encrypted Sync records, a Laravel backend, and a web dashboard.
 
 ## Current Status
 
@@ -55,7 +55,7 @@ routes/                    web.php, api.php, console.php
 tests/                     PHPUnit
 ```
 
-The former extension source is available in historical commit `33690ac8b621980ded566bea370fa1efb37b5300`. New Desktop builds do not package the extension, and the server exposes only the native API. Existing profiles still require the native data migration described below.
+The former extension source is available in historical commit `33690ac8b621980ded566bea370fa1efb37b5300`. New Desktop builds do not package the extension, and the server exposes only the native API. Version 1 bearer tokens are rejected on current Sync routes. Existing profiles still require the native data migration described below.
 
 ## Requirements
 
@@ -165,7 +165,7 @@ php artisan sync:recalculate-usage --user=1
 
 - Existing profiles and server records from the retired extension still need a verified native migration path.
 - Former extension clients cannot connect to this server after the removal of their API routes.
-- Native OAuth/PKCE, broader multiplatform testing, and full Link library management remain in progress.
+- Native OAuth/PKCE and broader multiplatform testing remain in progress.
 
 ## License
 

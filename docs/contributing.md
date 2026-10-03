@@ -120,7 +120,7 @@ document in the same PR:
 | Protocol contract / breaking change            | `docs/protocol.md` + ADR in `docs/adr/` |
 | Algorithm / KDF / payload layout               | `docs/encryption.md`                    |
 | DB migration with operational impact           | `docs/deployment.md`                    |
-| Native adapters / client storage shape         | Midori Desktop `docs/estado-integracion-sync-link-nativo.md` |
+| Native adapters / client storage shape         | Midori Desktop `docs/estado-integracion-sync-nativo.md` |
 | Threat model, headers, CORS, CSP               | `docs/security.md`                      |
 | User-visible or operator-visible changes       | `CHANGELOG.md`                          |
 

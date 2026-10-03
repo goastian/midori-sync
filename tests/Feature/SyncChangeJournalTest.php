@@ -132,7 +132,7 @@ class SyncChangeJournalTest extends TestCase
     {
         $this->withToken($this->token)->getJson(self::FEED.'?cursor=not-a-cursor')
             ->assertStatus(400)->assertJsonPath('error', 'invalid_cursor');
-        $unbound = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
+        $unbound = app(SyncAuthService::class)->createSessionToken($this->user, protocolVersion: 1)['token'];
         $this->withToken($unbound)->getJson(self::FEED)->assertUnauthorized();
     }
 

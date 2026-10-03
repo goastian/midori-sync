@@ -43,15 +43,14 @@ class ValidateSyncTokenTest extends TestCase
 
     public function test_retired_protocol_token_cannot_access_native_routes(): void
     {
-        $token = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
+        $token = app(SyncAuthService::class)->createSessionToken($this->user, protocolVersion: 1)['token'];
 
         $this->withToken($token)->getJson('/api/v1/devices')->assertUnauthorized();
-        $this->withToken($token)->getJson('/api/library/links')->assertUnauthorized();
     }
 
     public function test_expired_token_returns_401(): void
     {
-        $token = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
+        $token = app(SyncAuthService::class)->createSessionToken($this->user, protocolVersion: 1)['token'];
 
         SyncSession::query()->update(['expires_at' => now()->subSecond()]);
 
@@ -63,7 +62,7 @@ class ValidateSyncTokenTest extends TestCase
     public function test_revoked_token_returns_401(): void
     {
         $auth = app(SyncAuthService::class);
-        $token = $auth->createSessionToken($this->user)['token'];
+        $token = $auth->createSessionToken($this->user, protocolVersion: 1)['token'];
 
         $auth->revokeToken($token);
 

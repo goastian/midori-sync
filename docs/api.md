@@ -9,7 +9,6 @@ except public capabilities, pairing-code redemption and native OIDC exchange.
 
 The native client change feed, device acknowledgements and conditional operation batches are documented in [Native Sync API](native-sync-api.md), with a [machine-readable OpenAPI contract](native-sync.openapi.json). Existing timestamp-based endpoints remain available during migration.
 
-Native Link save receipts use `/api/library/v1/saves` on the same configured instance; see the [Link contract](native-link-api.md) and [OpenAPI schema](native-link.openapi.json).
 
 ### Revoke Token
 
@@ -253,3 +252,4 @@ Content-Type: application/json
 | `X-If-Unmodified-Since` | Request | Conditional write (microsecond timestamp) |
 | `X-Last-Modified` | Response | Last modification timestamp |
 | `X-Device-Id` | Request | Device identifier (optional) |
+

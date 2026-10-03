@@ -32,7 +32,7 @@ Cubre:
 
 - Backend Laravel (`app/`, `routes/`, `config/`).
 - Web dashboard (`resources/js/Pages/`).
-- Native Desktop Sync and Link client through `/api/v1`.
+- Native Desktop Sync client through `/api/v1`.
 - Imagenes Docker oficiales y `docker-compose.yml`.
 - Documentacion en `docs/` cuando exponga procedimientos inseguros.
 

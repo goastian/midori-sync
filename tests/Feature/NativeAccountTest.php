@@ -63,7 +63,7 @@ class NativeAccountTest extends TestCase
     public function test_account_requires_an_owned_device_and_live_session(): void
     {
         $user = $this->nativeUser();
-        $token = app(SyncAuthService::class)->createSessionToken($user)['token'];
+        $token = app(SyncAuthService::class)->createSessionToken($user, protocolVersion: 1)['token'];
         $this->withToken($token)->getJson('/api/v1/account')->assertUnauthorized();
         $other = $this->nativeUser();
         $device = Device::create(['user_id' => $other->id, 'device_id' => 'foreign', 'name' => 'Foreign', 'type' => 'desktop']);

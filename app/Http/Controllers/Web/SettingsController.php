@@ -26,7 +26,7 @@ class SettingsController extends Controller
 
     public function deleteAllData(Request $request)
     {
-        $this->storage->deleteAllUserData($request->user()->id);
+        $this->storage->deleteAllUserData($request->user()->id, ownerRequest: true);
 
         return redirect('/settings');
     }

@@ -52,7 +52,7 @@ class SyncChangeNotificationTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_only_committed_sync_and_link_changes_emit_account_scoped_hints(): void
+    public function test_only_committed_sync_changes_emit_account_scoped_hints(): void
     {
         $user = User::factory()->create(['storage_quota_bytes' => 104857600]);
         $storage = app(SyncStorageService::class);
@@ -64,17 +64,6 @@ class SyncChangeNotificationTest extends TestCase
         });
         $this->assertSame((string) $user->id, $this->notification()['payload']);
         $this->assertFalse($this->readNotification());
-
-        DB::table('library_link_changes')->insert([
-            'user_id' => $user->id,
-            'sequence' => 1,
-            'link_id' => (string) Str::uuid(),
-            'revision' => 1,
-            'deleted' => false,
-            'value' => json_encode(['title' => 'opaque-test'], JSON_THROW_ON_ERROR),
-            'created_at' => now(),
-        ]);
-        $this->assertSame((string) $user->id, $this->notification()['payload']);
 
         DB::table('sync_streams')->where('user_id', $user->id)->update(['generation' => (string) Str::uuid()]);
         $this->assertSame((string) $user->id, $this->notification()['payload']);

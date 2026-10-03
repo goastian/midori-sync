@@ -5,8 +5,7 @@ flow. Its source remains available at commit `33690ac8b621980ded566bea370fa1efb3
 Native V2 uses a versioned JSON envelope and the separate registry defined
 in [native-sync-api.md](native-sync-api.md). Migration must use the verified
 compatibility fixtures rather than infer guarantees from the older rotation
-description. Encryption of Sync records does not make Link's ordinary searchable
-library end-to-end encrypted.
+description.
 
 ## Overview
 

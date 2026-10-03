@@ -12,7 +12,7 @@ Midori Sync is a self-hosted, end-to-end encrypted browser synchronization servi
 │   (native Gecko)         │      │   (Inertia.js + Vite)    │
 │                          │      │                          │
 │  ┌────────────────────┐  │      │  ┌────────────────────┐  │
-│  │  Sync / Link       │  │      │  │  Devices / Coll.   │  │
+│  │  Sync       │  │      │  │  Devices / Coll.   │  │
 │  │  Places / Logins   │  │      │  │  Settings / Quota   │  │
 │  │  Rust Crypto       │  │      │  │                    │  │
 │  └────────┬───────────┘  │      │  └────────┬───────────┘  │

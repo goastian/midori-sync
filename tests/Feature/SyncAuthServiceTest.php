@@ -2,10 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Exceptions\SyncProtocolException;
 use App\Models\Device;
 use App\Models\SyncSession;
 use App\Models\User;
 use App\Services\SyncAuthService;
+use App\Services\SyncIdentityService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -71,6 +73,16 @@ class SyncAuthServiceTest extends TestCase
     public function test_validate_token_returns_null_for_unknown_token(): void
     {
         $this->assertNull($this->service->validateToken('not-a-real-token'));
+    }
+
+    public function test_session_without_a_device_cannot_be_issued_by_default(): void
+    {
+        config(['services.sync.local_dev' => true]);
+        $this->user->update(['authentik_issuer' => SyncIdentityService::DEVELOPMENT_ISSUER]);
+
+        $this->expectException(SyncProtocolException::class);
+        $this->expectExceptionMessage('device_required');
+        $this->service->createSessionToken($this->user);
     }
 
     public function test_validate_token_returns_null_for_expired_session(): void

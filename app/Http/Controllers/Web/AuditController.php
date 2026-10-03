@@ -4,19 +4,22 @@ namespace App\Http\Controllers\Web;
 
 use App\Http\Controllers\Controller;
 use App\Models\SyncSession;
+use App\Services\SyncAuthService;
 use App\Support\SecurityLog;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 
 class AuditController extends Controller
 {
+    public function __construct(private SyncAuthService $auth) {}
+
     public function index(Request $request)
     {
         $user = $request->user();
         $currentSessionId = $request->session()->getId();
 
         $status = $request->query('status', 'all'); // all|active|expired
-        if (!in_array($status, ['all', 'active', 'expired'], true)) {
+        if (! in_array($status, ['all', 'active', 'expired'], true)) {
             $status = 'all';
         }
 
@@ -29,15 +32,13 @@ class AuditController extends Controller
             ->orderByDesc('created_at');
 
         if ($status === 'active') {
-            $base->where('expires_at', '>', now());
+            $base->authorized();
         } elseif ($status === 'expired') {
-            $base->where(function ($q) {
-                $q->whereNull('expires_at')->orWhere('expires_at', '<=', now());
-            });
+            $base->inactive();
         }
 
         if ($query !== '') {
-            $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $query) . '%';
+            $like = '%'.str_replace(['%', '_'], ['\%', '\_'], $query).'%';
             $base->where(function ($q) use ($like) {
                 $q->where('ip_address', 'like', $like)
                     ->orWhere('user_agent', 'like', $like)
@@ -51,7 +52,8 @@ class AuditController extends Controller
         $paginator = $base->paginate($perPage)->withQueryString();
 
         $sessions = collect($paginator->items())->map(function (SyncSession $s) {
-            $isActive = $s->expires_at?->isFuture() ?? false;
+            $isActive = $s->authorizationIsActive();
+
             return [
                 'id' => $s->id,
                 'device' => $s->device ? [
@@ -64,18 +66,17 @@ class AuditController extends Controller
                 'created_at' => $s->created_at?->toIso8601String(),
                 'last_used_at' => $s->last_used_at?->toIso8601String(),
                 'expires_at' => $s->expires_at?->toIso8601String(),
+                'refresh_expires_at' => $s->refresh_expires_at?->toIso8601String(),
                 'active' => $isActive,
             ];
         })->values();
 
         // Aggregate stats over the user's full history (not the current page).
         $activeTokenCount = SyncSession::where('user_id', $user->id)
-            ->where('expires_at', '>', now())
+            ->authorized()
             ->count();
         $expiredCount = SyncSession::where('user_id', $user->id)
-            ->where(function ($q) {
-                $q->whereNull('expires_at')->orWhere('expires_at', '<=', now());
-            })
+            ->inactive()
             ->count();
 
         $recentLogins = SyncSession::where('user_id', $user->id)
@@ -119,9 +120,7 @@ class AuditController extends Controller
 
     public function revoke(Request $request, string $id)
     {
-        $deleted = SyncSession::where('user_id', $request->user()->id)
-            ->where('id', $id)
-            ->delete();
+        $deleted = $this->auth->revokeSession($request->user()->id, $id);
 
         if ($deleted) {
             SecurityLog::info(SecurityLog::EVENT_TOKEN_REVOKED, [
@@ -135,7 +134,7 @@ class AuditController extends Controller
 
     public function revokeAll(Request $request)
     {
-        $count = SyncSession::where('user_id', $request->user()->id)->delete();
+        $count = $this->auth->revokeAllForUser($request->user()->id);
 
         SecurityLog::warning(SecurityLog::EVENT_TOKEN_REVOKED_BULK, [
             'count' => (int) $count,

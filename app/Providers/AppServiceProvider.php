@@ -33,18 +33,29 @@ class AppServiceProvider extends ServiceProvider
             $bucket = $isRead ? 'r' : 'w';
             $owner = $request->user()?->id ?: $request->ip();
 
-            return Limit::perMinute($limit)->by("sync:{$bucket}:{$owner}");
+            return $this->refreshLimitResponse(Limit::perMinute($limit)->by("sync:{$bucket}:{$owner}"), $request);
         });
 
-        // Per-IP throttle for unauthenticated extension endpoints
-        // (auth/start, auth/poll, pair/redeem). Defaults to 30 req/min
-        // and is keyed strictly by IP so a single host cannot brute-force
-        // pairing tokens or sweep poll states.
+        // Unauthenticated pairing and refresh requests share a per-IP limit.
         RateLimiter::for('sync-unauth', function (Request $request) {
             $limit = (int) (config('services.sync.unauth_rate_limit')
                 ?? env('SYNC_UNAUTH_RATE_LIMIT', 30));
 
-            return Limit::perMinute($limit)->by('sync:u:' . $request->ip());
+            return $this->refreshLimitResponse(Limit::perMinute($limit)->by('sync:u:'.$request->ip()), $request);
         });
+
+        RateLimiter::for('sync-pairing-web', fn (Request $request) => Limit::perMinute(5)
+            ->by('sync:web-pair:'.$request->user()->id));
+
+    }
+
+    private function refreshLimitResponse(Limit $limit, Request $request): Limit
+    {
+        if ($request->is('api/v1/auth/refresh')) {
+            $limit->response(fn (Request $request, array $headers) => response()->json(['error' => 'rate_limited'], 429, $headers)
+                ->header('Cache-Control', 'no-store'));
+        }
+
+        return $limit;
     }
 }

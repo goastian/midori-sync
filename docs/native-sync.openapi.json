@@ -3,7 +3,7 @@
   "info": {
     "title": "Midori Native Sync API",
     "version": "0.3.0",
-    "description": "Implemented native-client profile of the Laravel API. Experimental: capabilities currently announce native_ready=false. This document covers pairing, session identity/renewal/revocation, incremental collections and native key lifecycle. Legacy extension endpoints, Link and future OAuth/PKCE flows are outside this contract. Send Accept: application/json and Content-Type: application/json for JSON bodies. Byte limits are UTF-8 byte limits, not JSON Schema character counts. See native-sync-api.md for transaction and migration semantics."
+    "description": "Implemented native-client profile of the Laravel API. Experimental: capabilities currently announce native_ready=false. This document covers pairing, public-client OIDC exchange, session identity/renewal/revocation, incremental collections and native key lifecycle. The retired extension API has been removed. Send Accept: application/json and Content-Type: application/json for JSON bodies. Byte limits are UTF-8 byte limits, not JSON Schema character counts. See native-sync-api.md for transaction and migration semantics."
   },
   "servers": [
     {
@@ -96,7 +96,7 @@
       "post": {
         "operationId": "redeemNativePairingCode",
         "summary": "Consume a code and create a native device session",
-        "description": "This contract describes native_client=true. Device names do not reuse device identity. Issuer binding is checked before consuming the code. native_refresh=true explicitly opts into version-1 renewable sessions (maximum 32 unexpired families per account); otherwise the original access-only behavior is preserved. No native OAuth/PKCE flow is implemented by this route.",
+        "description": "Device names do not reuse device identity. Issuer binding is checked before consuming the code. native_refresh=true explicitly opts into version-1 renewable sessions (maximum 32 unexpired families per account); otherwise the original access-only behavior is preserved. No native OAuth/PKCE flow is implemented by this route.",
         "security": [],
         "requestBody": {
           "required": true,
@@ -142,6 +142,51 @@
         }
       }
     },
+    "/auth/native-token": {
+      "post": {
+        "operationId": "exchangeNativeOidcToken",
+        "summary": "Create a renewable native session after public-client OIDC authorization",
+        "description": "The Desktop client completes authorization code with PKCE at the configured Authentik provider. This endpoint verifies the signed ID token, its issuer, public-client audience and nonce, checks the access token at userinfo, and consumes the ID token once. No pairing code is required.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeOidcRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "New renewable version-2 desktop session and device",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativePairResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "description": "Native OIDC is not configured or provider metadata is unavailable"
+          }
+        }
+      }
+    },
     "/account": {
       "get": {
         "operationId": "getNativeAccount",
@@ -182,7 +227,7 @@
       "delete": {
         "operationId": "revokeCurrentSession",
         "summary": "Revoke the current bearer session",
-        "description": "Revokes this session only. Does not erase profile data, other devices, Sync records or Link. Revokes the session ID established by authentication under the shared account lock, including when its token rotates before this handler runs.",
+        "description": "Revokes this session only. Does not erase profile data, other devices, Sync records . Revokes the session ID established by authentication under the shared account lock, including when its token rotates before this handler runs.",
         "responses": {
           "204": {
             "description": "Session revoked; empty response"
@@ -192,6 +237,82 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/sync/notifications/ticket": {
+      "post": {
+        "operationId": "issueSyncNotificationTicket",
+        "summary": "Issue a short-lived ticket for change notifications",
+        "description": "Requires a native version-2 session bound to an owned device. The ticket is one-use, expires after 30 seconds and replaces any earlier ticket for this session. Only its SHA-256 hash is stored. Desktop opens the event stream while background Sync is eligible and retains incremental polling as a fallback.",
+        "responses": {
+          "200": {
+            "description": "One-use notification ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "version",
+                    "ticket",
+                    "expires_at"
+                  ],
+                  "properties": {
+                    "version": {
+                      "type": "integer",
+                      "const": 1
+                    },
+                    "ticket": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/sync/notifications/stream": {
+      "get": {
+        "operationId": "watchSyncChanges",
+        "summary": "Receive account-scoped change hints",
+        "description": "Authenticate with a one-use notification ticket. The connection sends a heartbeat every 20 seconds and closes after at most 15 minutes. A changed event carries no account ID, collection name or record data; clients must then read the normal Sync feeds. The production nginx route proxies this stream to the dedicated Artisan daemon outside PHP-FPM.",
+        "security": [
+          {
+            "NotificationTicket": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent change hints",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": ": connected\n\nevent: changed\ndata: {}\n\n"
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired, reused or invalid notification ticket"
           }
         }
       }
@@ -615,7 +736,7 @@
       "delete": {
         "operationId": "eraseSyncData",
         "summary": "Explicitly erase Sync data and rotate generations",
-        "description": "Body limit 8192 bytes. Removes Sync records, key bundles, receipts and acknowledgements atomically. Rotates key epoch and stream generations. A native account remains native with no active key; legacy writing is not reenabled. Link data is separate and is not erased. Clients must reconcile the reset, never blindly republish old local data.",
+        "description": "Body limit 8192 bytes. Removes Sync records, key bundles, receipts and acknowledgements atomically. Rotates key epoch and stream generations. A native account remains native with no active key; legacy writing is not reenabled. Clients must reconcile the reset, never blindly republish old local data.",
         "requestBody": {
           "required": true,
           "content": {
@@ -958,6 +1079,12 @@
         "type": "http",
         "scheme": "bearer",
         "description": "Opaque Sync session token, not an OIDC access token. Store in the profile vault. Native key endpoints require a server-issued version-2 session."
+      },
+      "NotificationTicket": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "MidoriNotification followed by one space and the one-use 64-character ticket from POST /sync/notifications/ticket."
       }
     },
     "parameters": {
@@ -1186,7 +1313,8 @@
           "midori-tab",
           "midori-privacy",
           "devices",
-          "passwords"
+          "passwords",
+          "credit-cards"
         ]
       },
       "Identity": {
@@ -1368,6 +1496,9 @@
           "migration_required": {
             "type": "boolean"
           },
+          "legacy_frozen": {
+            "type": "boolean"
+          },
           "keys": {
             "type": "array",
             "items": {
@@ -1384,6 +1515,7 @@
           "active_key_id",
           "incompatible_sessions",
           "migration_required",
+          "legacy_frozen",
           "keys"
         ]
       },
@@ -1463,20 +1595,46 @@
             ],
             "default": "desktop"
           },
-          "native_client": {
-            "type": "boolean",
-            "const": true
-          },
           "native_refresh": {
             "type": "boolean",
             "default": false,
-            "description": "Explicit opt-in. Requires native_client=true. Omission never issues a renewable credential."
+            "description": "Explicit opt-in. Omission never issues a renewable credential."
           }
         },
         "required": [
           "pairing_token",
-          "device_name",
-          "native_client"
+          "device_name"
+        ]
+      },
+      "NativeOidcRequest": {
+        "type": "object",
+        "properties": {
+          "id_token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "access_token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "nonce": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 128
+          },
+          "device_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "id_token",
+          "access_token",
+          "nonce",
+          "device_name"
         ]
       },
       "NativePairResponse": {
@@ -1567,54 +1725,6 @@
       "Capabilities": {
         "type": "object",
         "properties": {
-          "link": {
-            "type": "object",
-            "description": "Implemented native Link save, cursor-browse and revisioned link-feed contracts on the same instance under /api/library; see native-link.openapi.json. The feed does not yet cover collection or annotation changes.",
-            "required": [
-              "save_version",
-              "save_request_bytes",
-              "save_receipts_per_account",
-              "browse_version",
-              "browse_page_limit",
-              "feed_version",
-              "feed_page_limit",
-              "feed_page_bytes"
-            ],
-            "properties": {
-              "save_version": {
-                "type": "integer",
-                "const": 1
-              },
-              "save_request_bytes": {
-                "type": "integer",
-                "const": 32768
-              },
-              "save_receipts_per_account": {
-                "type": "integer",
-                "const": 100000
-              },
-              "browse_version": {
-                "type": "integer",
-                "const": 1
-              },
-              "browse_page_limit": {
-                "type": "integer",
-                "const": 50
-              },
-              "feed_version": {
-                "type": "integer",
-                "const": 1
-              },
-              "feed_page_limit": {
-                "type": "integer",
-                "const": 50
-              },
-              "feed_page_bytes": {
-                "type": "integer",
-                "const": 524288
-              }
-            }
-          },
           "protocol": {
             "type": "string",
             "const": "MSP"
@@ -1640,6 +1750,39 @@
                 "anyOf": [
                   {
                     "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "oidc": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "version": {
+                        "type": "integer",
+                        "const": 1
+                      },
+                      "issuer": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "client_id": {
+                        "type": "string"
+                      },
+                      "discovery_url": {
+                        "type": "string",
+                        "format": "uri"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "issuer",
+                      "client_id",
+                      "discovery_url"
+                    ]
                   },
                   {
                     "type": "null"

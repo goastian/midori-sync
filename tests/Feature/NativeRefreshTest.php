@@ -304,7 +304,7 @@ class NativeRefreshTest extends TestCase
     public function test_cleanup_retains_renewal_proof_and_removes_receipts_only_when_authorization_ends(): void
     {
         [$user, , $data, $session] = $this->renewableSession();
-        app(SyncAuthService::class)->createSessionToken($user);
+        app(SyncAuthService::class)->createSessionToken($user, protocolVersion: 1);
         $this->travel(1)->minutes();
         $result = $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $data['refresh_token'], 'operation_id' => (string) Str::uuid()])->assertOk()->json();
         $this->travel(2)->hours();
@@ -353,7 +353,7 @@ class NativeRefreshTest extends TestCase
     {
         config(['inertia.pages.paths' => [resource_path('js/Pages')]]);
         [$user, , , $session] = $this->renewableSession();
-        app(SyncAuthService::class)->createSessionToken($user);
+        app(SyncAuthService::class)->createSessionToken($user, protocolVersion: 1);
         $this->travel(2)->hours();
         $this->withoutVite()->actingAs($user)->get('/audit?status=active')->assertOk()->assertInertia(fn (AssertableInertia $page) => $page
             ->component('Audit/Index')->has('sessions', 1)->where('sessions.0.id', $session->id)

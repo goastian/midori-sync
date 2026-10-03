@@ -8,9 +8,7 @@
 
 Midori Desktop, the dashboard, CLI clients and test harnesses use the
 versioned `/api/v1` Sync API. Authentication, device pairing, collection
-changes, encrypted records, key lifecycle and revocation share the same
-services and account locks. Link has its own `/api/library` routes and uses
-the same Sync session identity.
+changes, encrypted records, key lifecycle and revocation share the same Sync session identity.
 
 The former browser add-on and its `/api/ext` adapter have been removed. The
 server no longer accepts requests from that client. A native importer is
@@ -28,7 +26,7 @@ encrypted server records are not discarded by removing the adapter.
 4. Collection writes append immutable snapshots to the change journal.
    Native clients consume opaque cursors and conditional operations.
 5. A profile and account have one active Sync writer. Migration must
-   preserve bookmarks, history, passwords and Link data before cutover.
+   preserve bookmarks, history and passwords before cutover.
 
 ## HTTP behavior
 
@@ -44,3 +42,4 @@ refresh use the separate per-IP `sync-unauth` limiter.
 Gzip compression is optional through `SYNC_HTTP_COMPRESSION=true`. It is
 disabled by default because standard nginx deployments already compress
 responses from PHP-FPM.
+

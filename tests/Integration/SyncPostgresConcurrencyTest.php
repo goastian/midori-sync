@@ -2,21 +2,16 @@
 
 namespace Tests\Integration;
 
-use App\Exceptions\LibraryLimitException;
-use App\Exceptions\LibraryProtocolException;
 use App\Exceptions\SyncProtocolException;
 use App\Models\Device;
-use App\Models\Library\LibraryLink;
 use App\Models\SyncSession;
 use App\Models\User;
-use App\Services\Library\LinkWriter;
 use App\Services\SyncAuthService;
 use App\Services\SyncIdentityService;
 use App\Services\SyncNativeCryptoService;
 use App\Services\SyncRefreshService;
 use App\Services\SyncStorageService;
 use Database\Seeders\CollectionSeeder;
-use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -120,189 +115,6 @@ class SyncPostgresConcurrencyTest extends TestCase
                 $this->assertSame([], $storage->getChanges($user->id, 'history', $b->id, null, 100)['changes']);
                 $this->assertSame(5, $storage->getSyncInfo($user->id)['used_bytes']);
             }
-        } finally {
-            while (DB::transactionLevel() > 0) {
-                DB::rollBack();
-            }
-            fclose($sockets[0]);
-            if ($child !== null) {
-                posix_kill($child, SIGTERM);
-                pcntl_waitpid($child, $status);
-            }
-        }
-    }
-
-    public static function libraryScenarios(): array
-    {
-        return [
-            'canonical deduplication' => ['duplicate', 'existing'],
-            'shared link quota' => ['quota', 'quota_exceeded'],
-            'rollback releases capacity' => ['rollback', 'created'],
-            'native receipt replay' => ['receipt_replay', 'created'],
-            'native receipt conflict' => ['receipt_conflict', 'idempotency_conflict'],
-            'native receipt rollback' => ['receipt_rollback', 'created'],
-        ];
-    }
-
-    #[DataProvider('libraryScenarios')]
-    public function test_library_writers_serialize_deduplication_and_quota(string $scenario, string $expected): void
-    {
-        Bus::fake();
-        config(['library.billing_enabled' => false, 'library.selfhost_limits.max_links' => 1]);
-        $user = User::factory()->create();
-        $writer = app(LinkWriter::class);
-        $first = ['url' => 'https://93.184.216.34/item?utm_source=first'];
-        $second = ['url' => $scenario === 'quota' ? 'https://93.184.216.34/another' : 'https://93.184.216.34/item?utm_source=second'];
-        $native = str_starts_with($scenario, 'receipt_');
-        $rollback = in_array($scenario, ['rollback', 'receipt_rollback'], true);
-        if ($native) {
-            $first['operation_id'] = (string) Str::uuid();
-            $second = $first;
-            if ($scenario === 'receipt_conflict') {
-                $second['title'] = 'Different request';
-            }
-        }
-        $save = function (array $data) use ($writer, $user, $native): array {
-            if ($native) {
-                $receipt = $writer->saveOperation($user, $data);
-
-                return ['status' => $receipt['created'] ? 'created' : 'existing', 'id' => $receipt['link_id']];
-            }
-            $link = $writer->save($user, $data);
-
-            return ['status' => $link->wasRecentlyCreated ? 'created' : 'existing', 'id' => $link->id];
-        };
-        $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
-        $this->assertNotFalse($sockets);
-        DB::disconnect();
-        $child = pcntl_fork();
-        $this->assertNotSame(-1, $child);
-        if ($child === 0) {
-            fclose($sockets[0]);
-            try {
-                stream_set_timeout($sockets[1], 10);
-                if (trim((string) fgets($sockets[1])) !== 'go') {
-                    exit(2);
-                }
-                DB::statement("SET statement_timeout = '8s'");
-                fwrite($sockets[1], json_encode(['pid' => DB::selectOne('SELECT pg_backend_pid() AS pid')->pid])."\n");
-                try {
-                    $result = $save($second);
-                } catch (LibraryLimitException) {
-                    $result = ['status' => 'quota_exceeded'];
-                } catch (LibraryProtocolException $error) {
-                    $result = ['status' => $error->error];
-                }
-                fwrite($sockets[1], json_encode($result, JSON_THROW_ON_ERROR)."\n");
-                DB::disconnect();
-                fclose($sockets[1]);
-                exit(0);
-            } catch (\Throwable $error) {
-                fwrite($sockets[1], json_encode(['error' => $error->getMessage()])."\n");
-                exit(1);
-            }
-        }
-        fclose($sockets[1]);
-        stream_set_timeout($sockets[0], 10);
-        try {
-            DB::beginTransaction();
-            $firstResult = $save($first);
-            $this->assertSame('created', $firstResult['status']);
-            fwrite($sockets[0], "go\n");
-            $ready = json_decode((string) fgets($sockets[0]), true, flags: JSON_THROW_ON_ERROR);
-            $this->assertArrayHasKey('pid', $ready);
-            $this->assertTrue($this->waitForDatabaseLock($ready['pid']), 'The Link writer must wait for the competing account transaction.');
-            if ($rollback) {
-                DB::rollBack();
-            } else {
-                DB::commit();
-            }
-            $result = json_decode((string) fgets($sockets[0]), true, flags: JSON_THROW_ON_ERROR);
-            pcntl_waitpid($child, $status);
-            $child = null;
-            $this->assertTrue(pcntl_wifexited($status));
-            $this->assertSame(0, pcntl_wexitstatus($status), json_encode($result));
-            $this->assertSame($expected, $result['status']);
-            $this->assertSame(1, LibraryLink::where('user_id', $user->id)->count());
-            if (in_array($scenario, ['duplicate', 'receipt_replay'], true)) {
-                $this->assertSame($firstResult['id'], $result['id']);
-            } elseif ($rollback) {
-                $this->assertNotSame($firstResult['id'], $result['id']);
-                Bus::assertNothingDispatched();
-            }
-            if ($native) {
-                $receipt = DB::table('library_save_receipts')->where('user_id', $user->id)->sole();
-                $this->assertSame(LibraryLink::where('user_id', $user->id)->sole()->id, $receipt->link_id);
-                $this->assertSame($first['operation_id'], $receipt->operation_id);
-            }
-        } finally {
-            while (DB::transactionLevel() > 0) {
-                DB::rollBack();
-            }
-            fclose($sockets[0]);
-            if ($child !== null) {
-                posix_kill($child, SIGTERM);
-                pcntl_waitpid($child, $status);
-            }
-        }
-    }
-
-    public static function linkFeedScenarios(): array
-    {
-        return ['commit order' => [false], 'rollback order' => [true]];
-    }
-
-    #[DataProvider('linkFeedScenarios')]
-    public function test_link_feed_sequences_follow_commit_order_across_connections(bool $rollback): void
-    {
-        $user = User::factory()->create();
-        $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
-        $this->assertNotFalse($sockets);
-        DB::disconnect();
-        $child = pcntl_fork();
-        $this->assertNotSame(-1, $child);
-        if ($child === 0) {
-            fclose($sockets[0]);
-            try {
-                stream_set_timeout($sockets[1], 10);
-                if (trim((string) fgets($sockets[1])) !== 'go') {
-                    exit(2);
-                }
-                DB::statement("SET statement_timeout = '8s'");
-                fwrite($sockets[1], json_encode(['pid' => DB::selectOne('SELECT pg_backend_pid() AS pid')->pid])."\n");
-                $link = LibraryLink::create(['user_id' => $user->id, 'url' => 'https://example.org/second']);
-                fwrite($sockets[1], json_encode(['id' => $link->id], JSON_THROW_ON_ERROR)."\n");
-                DB::disconnect();
-                fclose($sockets[1]);
-                exit(0);
-            } catch (\Throwable $error) {
-                fwrite($sockets[1], json_encode(['error' => $error->getMessage()])."\n");
-                exit(1);
-            }
-        }
-
-        fclose($sockets[1]);
-        stream_set_timeout($sockets[0], 10);
-        try {
-            DB::beginTransaction();
-            $first = LibraryLink::create(['user_id' => $user->id, 'url' => 'https://example.org/first']);
-            fwrite($sockets[0], "go\n");
-            $ready = json_decode((string) fgets($sockets[0]), true, flags: JSON_THROW_ON_ERROR);
-            $this->assertArrayHasKey('pid', $ready);
-            $this->assertTrue($this->waitForDatabaseLock($ready['pid']), 'A Link writer must wait for the account feed sequence.');
-            if ($rollback) {
-                DB::rollBack();
-            } else {
-                DB::commit();
-            }
-            $result = json_decode((string) fgets($sockets[0]), true, flags: JSON_THROW_ON_ERROR);
-            pcntl_waitpid($child, $status);
-            $child = null;
-            $this->assertTrue(pcntl_wifexited($status));
-            $this->assertSame(0, pcntl_wexitstatus($status), json_encode($result));
-            $events = DB::table('library_link_changes')->where('user_id', $user->id)->orderBy('sequence')->get();
-            $this->assertSame($rollback ? [1] : [1, 2], $events->pluck('sequence')->map(fn ($value) => (int) $value)->all());
-            $this->assertSame($rollback ? [$result['id']] : [$first->id, $result['id']], $events->pluck('link_id')->all());
         } finally {
             while (DB::transactionLevel() > 0) {
                 DB::rollBack();

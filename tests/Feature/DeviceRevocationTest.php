@@ -47,7 +47,6 @@ class DeviceRevocationTest extends TestCase
         $this->assertNotNull($auth->validateToken($manager));
         $this->assertNotNull($auth->validateToken($survivor));
         $this->withToken($target)->getJson('/api/v1/account')->assertUnauthorized();
-        $this->withToken($target)->getJson('/api/library/links')->assertUnauthorized();
     }
 
     #[DataProvider('surfaces')]
@@ -83,7 +82,6 @@ class DeviceRevocationTest extends TestCase
         SyncSession::where('token_hash', hash('sha256', $token))->update(['device_id' => $device->id]);
         $device->delete();
         $this->assertNull($auth->validateToken($token));
-        $this->withToken($token)->getJson('/api/library/links')->assertUnauthorized();
     }
 
     public function test_session_creation_cannot_attach_a_deleted_or_foreign_device_even_in_legacy_mode(): void
@@ -94,7 +92,7 @@ class DeviceRevocationTest extends TestCase
         $auth = app(SyncAuthService::class);
         foreach ([$foreign->id, $foreign->id + 1000] as $id) {
             try {
-                $auth->createSessionToken($user, $id);
+                $auth->createSessionToken($user, $id, protocolVersion: 1);
                 $this->fail('A session must not outlive its device ownership check.');
             } catch (SyncProtocolException $error) {
                 $this->assertSame('device_required', $error->error);

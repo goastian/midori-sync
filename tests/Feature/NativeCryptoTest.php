@@ -121,7 +121,7 @@ class NativeCryptoTest extends TestCase
 
     public function test_incompatible_sessions_require_explicit_revocation_and_new_pairing_uses_native_protocol(): void
     {
-        $legacy = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
+        $legacy = app(SyncAuthService::class)->createSessionToken($this->user, protocolVersion: 1)['token'];
         $state = $this->state();
         $this->assertSame(1, $state['incompatible_sessions']);
         $request = ['crypto' => $this->context($state)] + $this->key();
@@ -180,25 +180,26 @@ class NativeCryptoTest extends TestCase
         $this->assertDatabaseCount('sync_changes', 2);
     }
 
-    public function test_link_association_records_are_encrypted_and_bound_to_their_collection(): void
+    public function test_payment_cards_use_an_independent_encrypted_collection(): void
     {
+        $this->assertContains('credit_cards', $this->getJson('/api/v1/capabilities')->assertOk()->json('features'));
         $state = $this->activate();
-        $url = '/api/v1/sync/collections/link-associations';
+        $url = '/api/v1/sync/collections/credit-cards';
         $generation = $this->getJson($url.'/changes')->assertOk()->json('generation');
-        $operation = $this->operation($generation, $state['active_key_id'], 'bookmarkGuid');
+        $operation = $this->operation($generation, $state['active_key_id'], 'cardGuid1234');
         $payload = json_decode($operation['payload'], true, flags: JSON_THROW_ON_ERROR);
-        $payload['context']['collection'] = 'link-associations';
+        $payload['context']['collection'] = 'credit-cards';
         $operation['payload'] = json_encode($payload, JSON_THROW_ON_ERROR);
         $request = ['crypto' => $this->context($state), 'generation' => $generation, 'operations' => [$operation]];
         $this->postJson($url.'/operations', $request)->assertOk()->assertJsonPath('results.0.status', 'applied');
-        $this->postJson($url.'/operations', $request)->assertOk()->assertJsonPath('results.0.status', 'applied');
-        $this->assertDatabaseHas('records', ['record_id' => 'bookmarkGuid', 'payload' => $operation['payload']]);
-        $this->getJson($url.'/changes')->assertOk()->assertJsonPath('changes.0.record.id', 'bookmarkGuid');
+        $this->assertDatabaseHas('records', ['record_id' => 'cardGuid1234', 'payload' => $operation['payload']]);
+        $this->assertStringNotContainsString('4111111111111111', $operation['payload']);
+        $this->getJson($url.'/changes')->assertOk()->assertJsonPath('changes.0.record.id', 'cardGuid1234');
 
-        $wrong = $this->operation($generation, $state['active_key_id'], 'anotherGuid');
+        $wrong = $this->operation($generation, $state['active_key_id'], 'otherCard123');
         $this->postJson($url.'/operations', ['crypto' => $this->context($state), 'generation' => $generation,
             'operations' => [$wrong]])->assertOk()->assertJsonPath('results.0.status', 'invalid');
-        $this->assertDatabaseMissing('records', ['record_id' => 'anotherGuid']);
+        $this->assertDatabaseMissing('records', ['record_id' => 'otherCard123']);
     }
 
     public function test_unknown_keys_and_mismatched_record_metadata_never_write(): void
@@ -268,7 +269,7 @@ class NativeCryptoTest extends TestCase
 
     public function test_legacy_foreign_expired_or_unbound_sessions_cannot_access_native_keys(): void
     {
-        $legacy = app(SyncAuthService::class)->createSessionToken($this->user)['token'];
+        $legacy = app(SyncAuthService::class)->createSessionToken($this->user, protocolVersion: 1)['token'];
         $this->withToken($legacy)->getJson('/api/v1/crypto/state')->assertUnauthorized();
         $this->withToken($this->token);
         $session = SyncSession::where('token_hash', hash('sha256', $this->token))->firstOrFail();
