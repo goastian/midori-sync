@@ -133,7 +133,7 @@ function saveEdit(device) {
         <section class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6" aria-labelledby="pairing-heading">
             <h2 id="pairing-heading" class="text-base font-semibold text-gray-900 dark:text-gray-100">Connect Midori Desktop</h2>
             <p class="text-sm text-gray-600 dark:text-gray-400 mt-2">
-                Open the Sync and Link popup in Midori Desktop, enter the code shown here, then select Connect account.
+                Open the Midori Sync popup in Midori Desktop, enter the code shown here, then select Connect account.
             </p>
             <div v-if="pairingCode" class="mt-4">
                 <div class="flex flex-wrap items-center gap-3">

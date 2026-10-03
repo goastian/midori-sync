@@ -356,7 +356,7 @@ class SyncPostgresConcurrencyTest extends TestCase
                 try {
                     match ($scenario) {
                         'legacy_write' => app(SyncStorageService::class)->upsertRecord($user->id, 'bookmarks', 'legacy', 'old payload'),
-                        'legacy_session' => app(SyncAuthService::class)->createSessionToken($user),
+                        'legacy_session' => app(SyncAuthService::class)->createSessionToken($user, protocolVersion: 1),
                         default => $crypto->activate($user->id, $context, $keyId, $bundle, false),
                     };
                     $result = ['error' => 'unexpected_success'];
@@ -418,7 +418,7 @@ class SyncPostgresConcurrencyTest extends TestCase
         $user = User::factory()->create();
         $device = Device::create(['user_id' => $user->id, 'device_id' => 'revocation-race', 'name' => 'Race', 'type' => 'desktop']);
         $auth = app(SyncAuthService::class);
-        $auth->createSessionToken($user, $device->id);
+        $auth->createSessionToken($user, $device->id, protocolVersion: 1);
         $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
         $this->assertNotFalse($sockets);
         DB::disconnect();
@@ -434,7 +434,7 @@ class SyncPostgresConcurrencyTest extends TestCase
                 DB::statement("SET statement_timeout = '8s'");
                 fwrite($sockets[1], json_encode(['pid' => DB::selectOne('SELECT pg_backend_pid() AS pid')->pid])."\n");
                 try {
-                    $auth->createSessionToken($user, $device->id);
+                    $auth->createSessionToken($user, $device->id, protocolVersion: 1);
                     $result = 'created';
                 } catch (SyncProtocolException $error) {
                     $result = $error->error;
