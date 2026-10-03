@@ -47,6 +47,8 @@ Route::prefix('v1')->middleware(SyncApiCors::class)->group(function () {
 
         // Crypto key bundle
         Route::get('/crypto/state', [NativeCryptoController::class, 'show']);
+        Route::get('/crypto/recovery', [NativeCryptoController::class, 'recovery'])->middleware('throttle:sync');
+        Route::post('/crypto/recovery', [NativeCryptoController::class, 'escrow'])->middleware('throttle:sync');
         Route::post('/crypto/activate', [NativeCryptoController::class, 'activate']);
         Route::post('/crypto/rotate', [NativeCryptoController::class, 'rotate']);
         Route::put('/crypto/native-keys/{keyId}', [NativeCryptoController::class, 'rewrap']);
