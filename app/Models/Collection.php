@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Support\Facades\Cache;
 
 class Collection extends Model
 {
@@ -24,8 +23,6 @@ class Collection extends Model
      */
     private static array $nameCache = [];
 
-    public const CACHE_TTL_SECONDS = 3600;
-
     public function records(): HasMany
     {
         return $this->hasMany(Record::class);
@@ -42,25 +39,13 @@ class Collection extends Model
             return self::$nameCache[$name];
         }
 
-        $cacheKey = 'collection:by_name:' . $name;
-
-        $collection = Cache::remember(
-            $cacheKey,
-            self::CACHE_TTL_SECONDS,
-            fn () => static::where('name', $name)->first(),
-        );
-
-        return self::$nameCache[$name] = $collection ?: null;
+        return self::$nameCache[$name] = static::where('name', $name)->first();
     }
 
-    /**
-     * Invalidate both in-memory and persistent caches for a collection
-     * name. Call this after any write that could change a Collection row.
-     */
+    /** Invalidate the in-memory lookup after a collection changes. */
     public static function forgetByName(string $name): void
     {
         unset(self::$nameCache[$name]);
-        Cache::forget('collection:by_name:' . $name);
     }
 
     /**
