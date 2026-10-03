@@ -9,7 +9,7 @@ defineProps({
 
 function formatTime(ts) {
     if (!ts) return 'Never';
-    return new Date(ts).toLocaleString();
+    return new Date(ts * 1000).toLocaleString();
 }
 </script>
 
