@@ -197,11 +197,23 @@ docker compose exec app php artisan sync:recalculate-usage --user=1
 docker compose exec postgres pg_dump -U midori midori_sync > backup.sql
 ```
 
+Back up the deployment's `APP_KEY` securely alongside the database. Native
+Sync now encrypts account recovery secrets with that key; a database backup
+without its matching application key cannot restore those secrets on a new
+device. Restrict access to the key and the `/api/v1/crypto/recovery` endpoint,
+which requires an authenticated native device session. Rotating `APP_KEY`
+requires retaining the previous key through Laravel's `APP_PREVIOUS_KEYS`
+until stored recovery secrets have been re-encrypted. This server-custody
+model allows login-only restoration but means server compromise can expose
+the material needed to decrypt synchronized browser data.
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `APP_URL` | `http://localhost` | Application URL |
+| `APP_KEY` | — | Encryption key for account recovery secrets; back up securely |
+| `APP_PREVIOUS_KEYS` | — | Previous keys needed while rotating encrypted recovery data |
 | `DB_CONNECTION` | `pgsql` | Database driver |
 | `DB_HOST` | `postgres` | Database host |
 | `DB_DATABASE` | `midori_sync` | Database name |

@@ -46,7 +46,8 @@ Pairing codes are stored as SHA-256 hashes, expire after the configured TTL and
 are consumed in the same transaction that creates the device and session.
 Device names are labels, not identity keys. Each redemption receives a new UUID.
 Pairing is available through `/api/v1/pair` and `/api/v1/pair/redeem`.
-Pairing establishes a session; it does not transfer E2EE keys.
+Pairing establishes a session; a native device can then fetch the account's
+server-held recovery secret through `/crypto/recovery` when available.
 
 The notification ticket endpoint requires a valid native V2 bearer bound to an
 owned device. It returns `version`, `ticket` and `expires_at` with `no-store`.
@@ -250,8 +251,10 @@ Capabilities advertise `crypto_state_version: 1` and native `crypto_versions: [2
 `native_ready` remains false. All native key endpoints require a live version-2
 session, an owned device and a bound account identity. They recheck the session
 inside the account transaction and lock its row against concurrent revocation.
-They return `Cache-Control: no-store`; they never receive a master key or
-recovery secret.
+They return `Cache-Control: no-store`. Native activation and recovery escrow
+now receive a recovery secret, encrypted under the Laravel application key at
+rest. This permits account login alone to restore a new device, but the server
+is no longer unable to recover client keys. Protect and back up `APP_KEY`.
 
 `GET /crypto/state` creates a state row lazily and returns:
 
@@ -264,6 +267,7 @@ recovery secret.
   "active_key_id": null,
   "incompatible_sessions": 0,
   "migration_required": false,
+  "server_recovery": false,
   "keys": []
 }
 ```
@@ -293,6 +297,18 @@ Activation and rotation requests contain:
   "encrypted_bundle": "V2 recovery-envelope JSON"
 }
 ```
+
+New native activation also sends `recovery_secret`, a 64-character lowercase
+hexadecimal value used to wrap its key. The server stores it encrypted in the
+same transaction as activation. `server_recovery` advertises whether the
+current epoch has such a secret. `GET /crypto/recovery` returns the epoch,
+revision and secret only to an authenticated, device-bound version-2 session;
+the client checks the epoch and revision before decrypting the bundles.
+`POST /crypto/recovery` accepts the current `crypto` context, that secret, and
+the complete `keys` array of freshly wrapped bundles. It changes all bundles
+and the escrow atomically, allowing an existing browser with all local keys to
+enable login-only recovery without the old code. A browser without those keys
+cannot invent them; an old account then needs its recovery code once.
 
 `crypto.revision` is a decimal string, distinct from the old integer bundle
 counter and from record revisions. The epoch and revision must exactly match
@@ -333,9 +349,10 @@ authorized to emit tombstones.
 all earlier bundles and encrypted records. It does not recipher records or
 complete a multi-device rotation. `PUT /crypto/native-keys/{keyId}` accepts
 `crypto` and `encrypted_bundle` to rewrap an existing key without changing the
-active key. Reusing a registered ID for rotation returns `409 key_id_exists`;
+active key. Both operations clear server recovery until a client escrows a
+complete new set of bundles. Reusing a registered ID for rotation returns `409 key_id_exists`;
 exceeding eight retained keys returns `409 key_capacity_reached`. Retirement,
-safe pruning, multi-key recovery-secret changes and resumable client reciphering
+safe pruning and resumable client reciphering
 remain pending. The server exposes no unsafe key-deletion shortcut.
 
 `DELETE /sync/data` takes the current `crypto` object. It removes Sync records,
