@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Exceptions\SyncProtocolException;
 use App\Http\Controllers\Controller;
+use App\Services\SyncBrowserAuthorizationService;
 use App\Services\SyncChangeJournal;
 use App\Services\SyncIdentityService;
 use App\Services\SyncNativeOidcService;
@@ -16,7 +17,8 @@ class SyncChangesController extends Controller
 {
     public function __construct(private SyncStorageService $storage) {}
 
-    public function capabilities(SyncIdentityService $identity, SyncNativeOidcService $oidc): JsonResponse
+    public function capabilities(SyncIdentityService $identity, SyncNativeOidcService $oidc,
+        SyncBrowserAuthorizationService $browser): JsonResponse
     {
         $nativeOidc = $oidc->configuration();
 
@@ -29,6 +31,7 @@ class SyncChangesController extends Controller
                 'development' => $identity->isDevelopment(),
                 'issuer' => $identity->configuredIssuer(),
                 'oidc' => $nativeOidc === null ? null : ['version' => 1] + $nativeOidc,
+                'browser_login' => $browser->available() ? ['version' => 1] : null,
                 'refresh' => [
                     'version' => 1,
                     'request_bytes' => SyncRefreshService::MAX_REQUEST_BYTES,

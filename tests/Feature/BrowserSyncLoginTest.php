@@ -1,0 +1,103 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Socialite\Facades\Socialite;
+use Mockery;
+use Tests\TestCase;
+
+class BrowserSyncLoginTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config([
+            'services.sync.local_dev' => false,
+            'services.authentik.client_id' => 'existing-web-client',
+            'services.authentik.client_secret' => 'server-only-secret',
+            'services.authentik.base_url' => 'https://accounts.example.invalid',
+            'services.authentik.issuer' => 'https://accounts.example.invalid/application/o/midori-sync/',
+            'services.authentik.redirect' => 'https://sync.example.invalid/auth/callback',
+            'services.authentik.native_client_id' => null,
+            'services.authentik.native_discovery_url' => null,
+        ]);
+    }
+
+    public function test_existing_web_login_authorizes_one_native_device_with_pkce(): void
+    {
+        $user = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);
+        $verifier = str_repeat('v', 43);
+        $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+        $state = str_repeat('s', 43);
+        $redirect = 'http://127.0.0.1:41831/midori-sync/callback';
+        $this->getJson('/api/v1/capabilities')->assertOk()
+            ->assertJsonPath('authentication.browser_login.version', 1)
+            ->assertJsonPath('authentication.oidc', null);
+
+        $this->actingAs($user)->get('/auth/desktop?'.http_build_query([
+            'state' => $state, 'code_challenge' => $challenge, 'redirect_uri' => $redirect,
+        ]))->assertRedirect(route('auth.desktop.confirm'));
+        $this->get('/auth/desktop/confirm')->assertOk()->assertSee('Connect Midori Desktop');
+        $response = $this->post('/auth/desktop/confirm')->assertRedirect();
+        $location = $response->headers->get('Location');
+        $this->assertStringStartsWith($redirect.'?', $location);
+        parse_str(parse_url($location, PHP_URL_QUERY), $parameters);
+        $this->assertSame($state, $parameters['state']);
+        $this->get('/auth/desktop/confirm')->assertStatus(410);
+
+        $body = ['code' => $parameters['code'], 'code_verifier' => str_repeat('x', 43),
+            'device_name' => 'Midori Desktop'];
+        $this->postJson('/api/v1/auth/browser-token', $body)->assertNotFound();
+        $body['code_verifier'] = $verifier;
+        $result = $this->postJson('/api/v1/auth/browser-token', $body)->assertCreated()
+            ->assertJsonPath('identity.issuer', config('services.authentik.issuer'))
+            ->assertJsonPath('identity.subject', $user->authentik_id);
+        $this->assertNotEmpty($result->json('refresh_token'));
+        $this->withToken($result->json('token'))->getJson('/api/v1/account')->assertOk()
+            ->assertJsonPath('device.id', $result->json('device.id'));
+        $this->postJson('/api/v1/auth/browser-token', $body)->assertNotFound();
+        $this->assertDatabaseCount('devices', 1);
+        $this->assertDatabaseCount('sync_sessions', 1);
+        $this->assertDatabaseCount('sync_browser_authorizations', 0);
+    }
+
+    public function test_browser_redirect_is_limited_to_the_local_callback(): void
+    {
+        $user = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);
+        foreach (['https://attacker.example.invalid/callback',
+            'http://127.0.0.1:41831/other', 'http://localhost:41831/midori-sync/callback',
+            'http://127.0.0.1:99999/midori-sync/callback'] as $redirect) {
+            $this->actingAs($user)->get('/auth/desktop?'.http_build_query([
+                'state' => str_repeat('s', 43), 'code_challenge' => str_repeat('c', 43),
+                'redirect_uri' => $redirect,
+            ]))->assertStatus(422);
+        }
+        $this->assertDatabaseCount('sync_browser_authorizations', 0);
+    }
+
+    public function test_authentik_callback_returns_to_the_pending_desktop_connection(): void
+    {
+        $user = User::factory()->create(['authentik_issuer' => null]);
+        $this->get('/auth/desktop?'.http_build_query([
+            'state' => str_repeat('s', 43), 'code_challenge' => str_repeat('c', 43),
+            'redirect_uri' => 'http://127.0.0.1:41831/midori-sync/callback',
+        ]))->assertRedirect(route('auth.redirect'));
+
+        $identity = Mockery::mock();
+        $identity->shouldReceive('getId')->andReturn($user->authentik_id);
+        $identity->shouldReceive('getEmail')->andReturn($user->email);
+        $identity->shouldReceive('getName')->andReturn($user->name);
+        $identity->shouldReceive('getAvatar')->andReturn(null);
+        $provider = Mockery::mock();
+        $provider->shouldReceive('user')->once()->andReturn($identity);
+        Socialite::shouldReceive('driver')->with('authentik')->andReturn($provider);
+
+        $this->get('/auth/callback')->assertRedirect(route('auth.desktop.confirm'));
+        $this->get('/auth/desktop/confirm')->assertOk();
+        $this->assertSame(config('services.authentik.issuer'), $user->fresh()->authentik_issuer);
+    }
+}

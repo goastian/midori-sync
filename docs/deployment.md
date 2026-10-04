@@ -39,8 +39,8 @@ AUTHENTIK_CLIENT_SECRET=<from-authentik>
 AUTHENTIK_BASE_URL=https://authentik.yourdomain.com
 AUTHENTIK_ISSUER=https://authentik.yourdomain.com/application/o/<application-slug>/
 AUTHENTIK_REDIRECT_URI=https://sync.yourdomain.com/auth/callback
-AUTHENTIK_NATIVE_CLIENT_ID=<public-desktop-client-id>
-AUTHENTIK_NATIVE_DISCOVERY_URL=https://authentik.yourdomain.com/application/o/<application-slug>/.well-known/openid-configuration
+AUTHENTIK_NATIVE_CLIENT_ID=
+AUTHENTIK_NATIVE_DISCOVERY_URL=
 
 # Sync settings
 SYNC_TOKEN_TTL=3600
@@ -49,7 +49,9 @@ SYNC_DEFAULT_QUOTA=104857600
 SYNC_RATE_LIMIT=60
 ```
 
-For direct Desktop sign-in, configure a separate **Public** Authentik OAuth2 provider with authorization code, PKCE S256 and the `openid`, `profile` and `email` scope mappings. Set both the dashboard's confidential provider and the Desktop public provider to Authentik's shared issuer mode and the same subject mode. Set `AUTHENTIK_ISSUER` to the shared issuer, normally `https://authentik.yourdomain.com/`; keep `AUTHENTIK_NATIVE_DISCOVERY_URL` under the public provider's application slug. Register the Desktop redirect URI as an anchored regex, `^http://127\.0\.0\.1:[0-9]{1,5}/midori-sync/callback$`. Do not leave the provider's redirect URI list empty. Midori chooses an available loopback port for each authorization and never embeds a client secret. Users of an existing per-provider issuer must sign in to the web dashboard again after the issuer change; a still-open web session cannot silently rebind the identity. Preserve the same subject mode when changing issuer. A local Sync API can use this flow with `SYNC_LOCAL_DEV=false` and the same HTTPS Authentik configuration.
+Desktop sign-in uses the existing confidential web client. Set `AUTHENTIK_CLIENT_ID`, `AUTHENTIK_CLIENT_SECRET`, `AUTHENTIK_BASE_URL`, `AUTHENTIK_ISSUER`, and `AUTHENTIK_REDIRECT_URI` as for the dashboard. Deploy the `sync_browser_authorizations` migration. After Authentik login, the user approves the Desktop connection in Midori Sync; a single-use, PKCE-bound authorization returns to the browser through loopback. No code is copied by the user, and the client secret stays on the server. Leave `AUTHENTIK_NATIVE_CLIENT_ID` and `AUTHENTIK_NATIVE_DISCOVERY_URL` empty unless the optional direct public OIDC flow is also configured.
+
+For optional direct Desktop sign-in, configure a separate **Public** Authentik OAuth2 provider with authorization code, PKCE S256 and the `openid`, `profile` and `email` scope mappings. The existing `AUTHENTIK_CLIENT_ID` and `AUTHENTIK_CLIENT_SECRET` belong to the dashboard's confidential login; Desktop cannot use that client secret. Set both the dashboard's confidential provider and the Desktop public provider to Authentik's shared issuer mode and the same subject mode. Set `AUTHENTIK_ISSUER` to the shared issuer, normally `https://authentik.yourdomain.com/`; keep `AUTHENTIK_NATIVE_DISCOVERY_URL` under the public provider's application slug. The Sync API advertises the public client ID and discovery URL to Desktop through `/api/v1/capabilities`; they are not hardcoded in the browser. Register the Desktop redirect URI as an anchored regex, `^http://127\.0\.0\.1:[0-9]{1,5}/midori-sync/callback$`. Do not leave the provider's redirect URI list empty. Midori chooses an available loopback port for each authorization and never embeds a client secret. Users of an existing per-provider issuer must sign in to the web dashboard again after the issuer change; a still-open web session cannot silently rebind the identity. Preserve the same subject mode when changing issuer. A local Sync API can use this flow with `SYNC_LOCAL_DEV=false` and the same HTTPS Authentik configuration.
 
 ### 3. Start services
 
@@ -224,8 +226,8 @@ the material needed to decrypt synchronized browser data.
 | `AUTHENTIK_CLIENT_SECRET` | — | OAuth secret |
 | `AUTHENTIK_BASE_URL` | — | Authentik instance URL |
 | `AUTHENTIK_ISSUER` | — | Exact `issuer` from this application's OpenID discovery document; required for native pairing |
-| `AUTHENTIK_NATIVE_CLIENT_ID` | — | Public Desktop OIDC client ID; enables the native token exchange when set with discovery URL |
-| `AUTHENTIK_NATIVE_DISCOVERY_URL` | — | HTTPS discovery URL on the exact issuer origin; issuer must match `AUTHENTIK_ISSUER` |
+| `AUTHENTIK_NATIVE_CLIENT_ID` | — | Optional public Desktop OIDC client ID for direct provider login |
+| `AUTHENTIK_NATIVE_DISCOVERY_URL` | — | Optional HTTPS discovery URL for that public provider; issuer must match `AUTHENTIK_ISSUER` |
 | `SYNC_TOKEN_TTL` | `3600` | Token lifetime in seconds |
 | `SYNC_MAX_RECORD_SIZE` | `262144` | Max record size (256 KB) |
 | `SYNC_DEFAULT_QUOTA` | `104857600` | Default user quota (100 MB) |

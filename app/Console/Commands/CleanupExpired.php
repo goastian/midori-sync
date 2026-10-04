@@ -19,9 +19,10 @@ class CleanupExpired extends Command
         $records = $storage->cleanupExpiredRecords();
         $sessions = $auth->cleanupExpired();
         $exchanges = DB::table('sync_native_oidc_exchanges')->where('expires_at', '<=', now())->delete();
+        $authorizations = DB::table('sync_browser_authorizations')->where('expires_at', '<=', now())->delete();
         $expiredTickets = $tickets->cleanupExpired();
 
-        $this->info("Cleaned up {$records} expired records, {$sessions} expired sessions and {$exchanges} OIDC exchanges; {$expiredTickets} notification tickets.");
+        $this->info("Cleaned up {$records} expired records, {$sessions} expired sessions and {$exchanges} OIDC exchanges; {$expiredTickets} notification tickets; {$authorizations} browser authorizations.");
 
         return self::SUCCESS;
     }

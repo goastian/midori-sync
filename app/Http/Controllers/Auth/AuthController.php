@@ -46,11 +46,16 @@ class AuthController extends Controller
         app(SyncIdentityService::class)->bindAuthenticatedWebUser($user, freshLogin: true);
 
         Auth::login($user, remember: true);
+        $request->session()->regenerate();
 
         SecurityLog::info(SecurityLog::EVENT_LOGIN_SUCCESS, [
             'user_id' => $user->id,
             'flow' => 'web',
         ], $request);
+
+        if ($request->session()->has('sync_browser_authorization')) {
+            return redirect()->route('auth.desktop.confirm');
+        }
 
         return redirect()->intended('/dashboard');
     }

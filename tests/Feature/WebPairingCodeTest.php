@@ -7,6 +7,7 @@ use App\Services\SyncIdentityService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
+use Inertia\Testing\AssertableInertia;
 use Laravel\Socialite\Facades\Socialite;
 use Mockery;
 use Tests\TestCase;
@@ -19,6 +20,17 @@ class WebPairingCodeTest extends TestCase
     {
         parent::setUp();
         config(['services.sync.local_dev' => true]);
+    }
+
+    public function test_devices_page_offers_a_code_only_in_local_development(): void
+    {
+        $user = User::factory()->create(['authentik_issuer' => SyncIdentityService::DEVELOPMENT_ISSUER]);
+        $this->actingAs($user)->get('/devices')->assertOk()->assertInertia(fn (AssertableInertia $page) => $page
+            ->component('Devices/Index', false)->where('developmentPairing', true)->etc());
+
+        config(['services.sync.local_dev' => false]);
+        $this->get('/devices')->assertOk()->assertInertia(fn (AssertableInertia $page) => $page
+            ->component('Devices/Index', false)->where('developmentPairing', false)->etc());
     }
 
     public function test_authenticated_web_account_can_generate_and_redeem_a_native_code(): void

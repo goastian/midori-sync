@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\AccountController;
 use App\Http\Controllers\Api\V1\AuthTokenController;
+use App\Http\Controllers\Api\V1\BrowserSyncController;
 use App\Http\Controllers\Api\V1\DeviceController;
 use App\Http\Controllers\Api\V1\NativeCryptoController;
 use App\Http\Controllers\Api\V1\NativeOidcController;
@@ -21,6 +22,7 @@ Route::prefix('v1')->middleware(SyncApiCors::class)->group(function () {
     Route::options('{any}', fn () => response('', 204))->where('any', '.*');
 
     Route::post('/auth/native-token', [NativeOidcController::class, 'store'])->middleware('throttle:sync-unauth');
+    Route::post('/auth/browser-token', [BrowserSyncController::class, 'store'])->middleware('throttle:sync-unauth');
     Route::get('/capabilities', [SyncChangesController::class, 'capabilities'])->middleware('throttle:sync-unauth');
     Route::post('/pair/redeem', [PairingController::class, 'redeem'])->middleware('throttle:sync-unauth');
     Route::post('/auth/refresh', [RefreshSessionController::class, 'store'])->middleware('throttle:sync-unauth');

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Auth\AuthController;
+use App\Http\Controllers\Auth\BrowserSyncController;
 use App\Http\Controllers\Web\AuditController;
 use App\Http\Controllers\Web\CollectionController;
 use App\Http\Controllers\Web\DashboardController;
@@ -24,6 +25,9 @@ Route::get('/', function () {
 // Auth (Authentik OAuth)
 Route::get('/auth/redirect', [AuthController::class, 'redirect'])->name('auth.redirect');
 Route::get('/auth/callback', [AuthController::class, 'callback'])->name('auth.callback');
+Route::get('/auth/desktop', [BrowserSyncController::class, 'start'])->middleware('throttle:sync-unauth')->name('auth.desktop.start');
+Route::get('/auth/desktop/confirm', [BrowserSyncController::class, 'confirm'])->name('auth.desktop.confirm');
+Route::post('/auth/desktop/confirm', [BrowserSyncController::class, 'approve'])->middleware('throttle:sync-unauth')->name('auth.desktop.approve');
 Route::post('/auth/logout', [AuthController::class, 'logout'])->name('auth.logout');
 
 if (app()->environment(['local', 'testing']) && config('services.sync.local_dev') === true
