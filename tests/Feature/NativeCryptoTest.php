@@ -14,7 +14,6 @@ use App\Services\SyncPairingService;
 use App\Services\SyncStorageService;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -65,55 +64,34 @@ class NativeCryptoTest extends TestCase
 
     private function activate(): array
     {
-        return $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($this->state())] + $this->key())
+        return $this->postActivation(['crypto' => $this->context($this->state())] + $this->key())
             ->assertOk()->assertJsonPath('mode', 'native')->assertJsonPath('revision', '1')->json();
     }
 
-    public function test_server_recovery_is_encrypted_account_bound_and_cleared_on_reset(): void
+    private function postActivation(array $body)
     {
-        $secret = str_repeat('a', 64);
-        $legacy = app(SyncAuthService::class)->createSessionToken($this->user, protocolVersion: 1)['token'];
-        $before = $this->state();
-        $state = $this->postJson('/api/v1/crypto/activate', [
-            'crypto' => $this->context($before), 'recovery_secret' => $secret, 'revoke_incompatible' => true,
-        ] + $this->key())->assertOk()->assertJsonPath('server_recovery', true)->json();
-        $this->assertArrayNotHasKey('recovery_secret', $state);
-        $saved = DB::table('sync_server_recovery')->where('user_id', $this->user->id)->first();
-        $this->assertNotNull($saved);
-        $this->assertSame($state['epoch'], $saved->epoch);
-        $this->assertStringNotContainsString($secret, $saved->encrypted_secret);
-        $this->assertSame($secret, $this->getJson('/api/v1/crypto/recovery')->assertOk()
-            ->assertHeader('Cache-Control', 'no-store, private')->json('recovery_secret'));
-        $this->withToken($legacy)->getJson('/api/v1/crypto/recovery')->assertUnauthorized();
-        $this->withToken('invalid')->getJson('/api/v1/crypto/recovery')->assertUnauthorized();
-        $this->withToken($this->token);
-        $other = User::factory()->create(['authentik_issuer' => SyncIdentityService::DEVELOPMENT_ISSUER]);
-        $device = Device::create(['user_id' => $other->id, 'device_id' => (string) Str::uuid(), 'name' => 'Other', 'type' => 'desktop']);
-        $otherToken = app(SyncAuthService::class)->createSessionToken($other, $device->id, protocolVersion: 2)['token'];
-        $this->withToken($otherToken)->getJson('/api/v1/crypto/recovery')->assertNotFound();
-        $this->withToken($this->token);
-        $this->deleteJson('/api/v1/sync/data', ['crypto' => $this->context($state)])->assertNoContent();
-        $this->assertDatabaseCount('sync_server_recovery', 0);
-        $this->getJson('/api/v1/crypto/recovery')->assertNotFound();
+        return $this->postJson('/api/v1/crypto/activate', $body + [
+            'identity_key' => $this->key(90), 'registry_auth' => str_repeat('a', 64),
+        ]);
     }
 
-    public function test_existing_native_keys_can_be_escrowed_atomically(): void
+    private function beginRotation(array $state, int $index): array
+    {
+        return $this->postJson('/api/v1/crypto/rotation', [
+            'crypto' => $this->context($state), 'operation_id' => (string) Str::uuid(),
+            'keys' => [...$state['keys'], $this->key($index)],
+            'identity_key' => $this->key(90), 'registry_auth' => str_repeat('b', 64),
+        ] + $this->key($index))->assertOk()->json();
+    }
+
+    public function test_existing_escrow_is_preserved_but_new_escrow_is_rejected(): void
     {
         $state = $this->activate();
-        $secret = str_repeat('b', 64);
-        $body = ['crypto' => $this->context($state), 'keys' => [$this->key()], 'recovery_secret' => $secret];
-        $this->postJson('/api/v1/crypto/recovery', $body)->assertOk()
-            ->assertJsonPath('server_recovery', true)->assertJsonPath('revision', '2');
-        $this->postJson('/api/v1/crypto/recovery', $body)->assertStatus(409)
-            ->assertJsonPath('error', 'crypto_state_conflict');
-        $current = $this->state();
-        $this->postJson('/api/v1/crypto/recovery', [
-            'crypto' => $this->context($current), 'keys' => [$this->key(2)], 'recovery_secret' => str_repeat('c', 64),
-        ])->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
-        $this->assertSame($secret, $this->getJson('/api/v1/crypto/recovery')->assertOk()->json('recovery_secret'));
-        $this->postJson('/api/v1/crypto/rotate', ['crypto' => $this->context($current)] + $this->key(2))
-            ->assertOk()->assertJsonPath('server_recovery', false);
-        $this->getJson('/api/v1/crypto/recovery')->assertNotFound();
+        $this->postJson('/api/v1/crypto/recovery', ['crypto' => $this->context($state),
+            'keys' => [$this->key()], 'recovery_secret' => str_repeat('a', 64)])
+            ->assertConflict()->assertJsonPath('error', 'server_recovery_disabled');
+        $this->assertDatabaseCount('sync_server_recovery', 0);
+        $this->assertSame($state, $this->state());
     }
 
     private function generation(): string
@@ -125,7 +103,7 @@ class NativeCryptoTest extends TestCase
     {
         return ['operation_id' => (string) Str::uuid(), 'id' => $id, 'base_revision' => $revision, 'payload' => json_encode([
             'crypto_version' => 2, 'key_id' => $keyId, 'purpose' => 'record',
-            'context' => ['collection' => 'bookmarks', 'id' => $id, 'generation' => $generation, 'schema_version' => 1, 'base_revision' => $revision],
+            'context' => ['collection' => 'bookmarks', 'id' => $id, 'generation' => $generation, 'schema_version' => 2, 'base_revision' => $revision],
             'nonce' => base64_encode(str_repeat('n', 24)), 'ciphertext' => base64_encode(str_repeat('c', 20)),
         ], JSON_THROW_ON_ERROR)];
     }
@@ -148,9 +126,9 @@ class NativeCryptoTest extends TestCase
         $this->assertNotSame($oldGeneration, $this->generation());
         $this->assertCount(1, $state['keys']);
         $this->assertFalse($state['migration_required']);
-        $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($before)] + $this->key(2))
+        $this->postActivation(['crypto' => $this->context($before)] + $this->key(2))
             ->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
-        $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($state)] + $this->key(2))
+        $this->postActivation(['crypto' => $this->context($state)] + $this->key(2))
             ->assertStatus(409)->assertJsonPath('error', 'native_keys_already_active');
         $this->assertDatabaseCount('sync_native_keys', 1);
     }
@@ -173,9 +151,9 @@ class NativeCryptoTest extends TestCase
         $state = $this->state();
         $this->assertSame(1, $state['incompatible_sessions']);
         $request = ['crypto' => $this->context($state)] + $this->key();
-        $this->postJson('/api/v1/crypto/activate', $request)->assertStatus(409)->assertJsonPath('error', 'incompatible_devices');
+        $this->postActivation($request)->assertStatus(409)->assertJsonPath('error', 'incompatible_devices');
         $this->assertDatabaseHas('sync_sessions', ['token_hash' => hash('sha256', $legacy)]);
-        $this->postJson('/api/v1/crypto/activate', $request + ['revoke_incompatible' => true])
+        $this->postActivation($request + ['revoke_incompatible' => true])
             ->assertOk()->assertJsonPath('incompatible_sessions', 0);
         $this->withToken($legacy)->getJson('/api/v1/crypto/state')->assertUnauthorized();
         $this->withToken($this->token);
@@ -194,7 +172,7 @@ class NativeCryptoTest extends TestCase
     {
         app(SyncStorageService::class)->upsertRecord($this->user->id, 'bookmarks', 'legacy', 'encrypted legacy payload');
         $state = $this->state();
-        $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($state)] + $this->key())
+        $this->postActivation(['crypto' => $this->context($state)] + $this->key())
             ->assertStatus(409)->assertJsonPath('error', 'legacy_migration_required');
         $this->assertTrue($state['migration_required']);
         $this->assertDatabaseHas('records', ['record_id' => 'legacy', 'payload' => 'encrypted legacy payload']);
@@ -204,7 +182,7 @@ class NativeCryptoTest extends TestCase
             'user_id' => $this->user->id, 'encrypted_bundle' => 'legacy recovery bundle', 'version' => 1,
         ]);
         $this->assertTrue($this->state()['migration_required']);
-        $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($this->state())] + $this->key())
+        $this->postActivation(['crypto' => $this->context($this->state())] + $this->key())
             ->assertStatus(409)->assertJsonPath('error', 'legacy_migration_required');
         $this->assertDatabaseHas('crypto_key_bundles', ['encrypted_bundle' => 'legacy recovery bundle']);
         $this->assertDatabaseCount('sync_native_keys', 0);
@@ -216,7 +194,7 @@ class NativeCryptoTest extends TestCase
         $generation = $this->generation();
         $operation = $this->operation($generation, $state['active_key_id']);
         $first = $this->submit($state, $generation, $operation)->assertOk()->assertJsonPath('results.0.status', 'applied')->json();
-        $rotated = $this->postJson('/api/v1/crypto/rotate', ['crypto' => $this->context($state)] + $this->key(2))->assertOk()->json();
+        $rotated = $this->beginRotation($state, 2);
         $this->assertCount(2, $rotated['keys']);
         $this->submit($state, $generation, $operation)->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
         $this->assertSame($first, $this->submit($rotated, $generation, $operation)->assertOk()->json());
@@ -269,18 +247,15 @@ class NativeCryptoTest extends TestCase
         $this->assertDatabaseCount('sync_operations', 0);
     }
 
-    public function test_rewrap_changes_only_the_selected_bundle_and_uses_state_preconditions(): void
+    public function test_old_rotation_and_rewrap_cannot_bypass_the_authenticated_registry(): void
     {
         $state = $this->activate();
-        $rotated = $this->postJson('/api/v1/crypto/rotate', ['crypto' => $this->context($state)] + $this->key(2))->assertOk()->json();
-        $bundle = json_decode($this->key()['encrypted_bundle'], true, flags: JSON_THROW_ON_ERROR);
-        $bundle['ciphertext'] = base64_encode(str_repeat('b', 48));
-        $request = ['crypto' => $this->context($rotated), 'encrypted_bundle' => json_encode($bundle, JSON_THROW_ON_ERROR)];
-        $url = '/api/v1/crypto/native-keys/'.$state['active_key_id'];
-        $this->putJson($url, $request)->assertOk()->assertJsonPath('revision', '3')->assertJsonPath('active_key_id', $rotated['active_key_id']);
-        $this->putJson($url, $request)->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
-        $this->assertDatabaseHas('sync_native_keys', ['key_id' => $state['active_key_id'], 'encrypted_bundle' => $request['encrypted_bundle']]);
-        $this->assertDatabaseHas('sync_native_keys', $this->key(2));
+        $this->postJson('/api/v1/crypto/rotate', ['crypto' => $this->context($state)] + $this->key(2))
+            ->assertConflict()->assertJsonPath('error', 'durable_rotation_required');
+        $this->putJson('/api/v1/crypto/native-keys/'.$state['active_key_id'], [
+            'crypto' => $this->context($state), 'encrypted_bundle' => $this->key()['encrypted_bundle'],
+        ])->assertConflict()->assertJsonPath('error', 'durable_rotation_required');
+        $this->assertSame($state, $this->state());
     }
 
     public function test_wipe_rotates_epoch_and_never_reenables_legacy_writes(): void
@@ -288,16 +263,16 @@ class NativeCryptoTest extends TestCase
         $state = $this->activate();
         $generation = $this->generation();
         $this->submit($state, $generation, $this->operation($generation, $state['active_key_id']))->assertOk();
-        $this->deleteJson('/api/v1/sync/data', ['crypto' => $this->context($state)])->assertNoContent();
+        app(SyncStorageService::class)->deleteAllUserData($this->user->id, ownerRequest: true);
         $empty = $this->state();
         $this->assertSame('native', $empty['mode']);
         $this->assertNull($empty['active_key_id']);
         $this->assertNotSame($state['epoch'], $empty['epoch']);
         $this->assertSame('0', $empty['revision']);
         $this->assertSame([], $empty['keys']);
-        $this->postJson('/api/v1/crypto/activate', ['crypto' => ['epoch' => $state['epoch'], 'revision' => '0']] + $this->key(2))
+        $this->postActivation(['crypto' => ['epoch' => $state['epoch'], 'revision' => '0']] + $this->key(2))
             ->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
-        $fresh = $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($empty)] + $this->key(2))->assertOk()->json();
+        $fresh = $this->postActivation(['crypto' => $this->context($empty)] + $this->key(2))->assertOk()->json();
         $this->submit($fresh, $generation, $this->operation($generation, $fresh['active_key_id']))->assertStatus(409);
         $this->assertDatabaseCount('records', 0);
     }
@@ -305,13 +280,17 @@ class NativeCryptoTest extends TestCase
     public function test_keys_are_bounded_and_cannot_reuse_an_existing_identifier(): void
     {
         $state = $this->activate();
-        $this->postJson('/api/v1/crypto/rotate', ['crypto' => $this->context($state)] + $this->key())
-            ->assertStatus(409)->assertJsonPath('error', 'key_id_exists');
         for ($i = 2; $i <= SyncNativeCryptoService::MAX_KEYS; $i++) {
-            $state = $this->postJson('/api/v1/crypto/rotate', ['crypto' => $this->context($state)] + $this->key($i))->assertOk()->json();
+            $state = $this->beginRotation($state, $i);
+            $state = $this->postJson('/api/v1/crypto/rotation/complete', [
+                'crypto' => $this->context($state), 'operation_id' => $state['rotation']['operation_id'], 'registry_auth' => str_repeat('f', 64),
+            ])->assertOk()->json();
         }
-        $this->postJson('/api/v1/crypto/rotate', ['crypto' => $this->context($state)] + $this->key(9))
-            ->assertStatus(409)->assertJsonPath('error', 'key_capacity_reached');
+        $this->postJson('/api/v1/crypto/rotation', [
+            'crypto' => $this->context($state), 'operation_id' => (string) Str::uuid(),
+            'identity_key' => $this->key(90), 'registry_auth' => str_repeat('b', 64),
+            'keys' => [...$state['keys'], $this->key(9)],
+        ] + $this->key(9))->assertUnprocessable();
         $this->assertCount(8, $this->state()['keys']);
     }
 
@@ -341,7 +320,7 @@ class NativeCryptoTest extends TestCase
             $bundle = json_decode($key['encrypted_bundle'], true, flags: JSON_THROW_ON_ERROR);
             $bundle[$field] = 'invalid';
             $key['encrypted_bundle'] = json_encode($bundle, JSON_THROW_ON_ERROR);
-            $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($state)] + $key)
+            $this->postActivation(['crypto' => $this->context($state)] + $key)
                 ->assertStatus(422)->assertJsonPath('error', 'invalid_native_bundle');
         }
         $this->assertSame($state, $this->state());
@@ -370,9 +349,9 @@ class NativeCryptoTest extends TestCase
         $empty = $this->state();
         $this->assertSame([], $empty['keys']);
         $this->assertNotSame($state['epoch'], $empty['epoch']);
-        $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($state), 'user_id' => $this->user->id] + $this->key(2))
+        $this->postActivation(['crypto' => $this->context($state), 'user_id' => $this->user->id] + $this->key(2))
             ->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
-        $this->postJson('/api/v1/crypto/activate', ['crypto' => $this->context($empty), 'user_id' => $this->user->id] + $this->key(2))->assertOk();
+        $this->postActivation(['crypto' => $this->context($empty), 'user_id' => $this->user->id] + $this->key(2))->assertOk();
         $this->withToken($this->token);
         $this->assertSame($state, $this->state());
         $this->assertDatabaseHas('sync_native_keys', ['user_id' => $other->id] + $this->key(2));

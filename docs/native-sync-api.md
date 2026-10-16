@@ -14,6 +14,142 @@ The native OIDC exchange is available when a public Authentik client is configur
 The retired extension routes have been removed. The format
 follows the [OpenAPI specification](https://spec.openapis.org/oas/v3.1.0.html).
 
+## Client custody extension (2026-10-15)
+
+`crypto_custody_version: 1`, `record_schema_versions: [1, 2]` and
+`client_recovery.version: 1` advertise the H1 extension. `native_ready` remains
+false. The earlier descriptions below are historical where they conflict with
+this extension; clients must negotiate this extension before writing.
+
+New activation requires `identity_key: {key_id, encrypted_bundle}` and
+`registry_auth` (64 lowercase hexadecimal characters), in addition to the data
+key and current crypto context. `custody` may be explicitly `client`;
+`recovery_secret` is prohibited. The identity key is separate from the eight
+data-key slots and cannot share a data-key ID. Once registered, its ID cannot
+change during rotation. Its bundle may be rewrapped under a new client-only
+recovery code. The server receives no such code or equivalent opening secret.
+
+State adds `custody` (`server`, `transition`, `client`), `identity_key`,
+`registry_auth` and nullable `rotation`. Existing accounts initially retain
+`server` custody and their existing encrypted recovery secret unchanged.
+`registry_auth` is an opaque client MAC over the UTF-8 JSON array
+`["MidoriSync/key-registry/v1", epoch, active_key_id, identity_key, sortedDataKeys,
+custody, server_recovery, stableRotation]`. Keys are sorted by ASCII key ID.
+`stableRotation` is null or an object with properties in this order:
+`operation_id`, `target_key_id`, sorted `source_key_ids`, and `phase`.
+The server stores the tag; the client verifies it using the recovered identity
+key before trusting the registry. Revision and progress counters are excluded.
+Custody, recovery availability and rotation state are authenticated to prevent
+an altered response from enabling legacy reads. A valid envelope shape alone
+does not demonstrate recoverability or AEAD.
+
+`GET /crypto/recovery` and `POST /crypto/recovery` always reject with
+`409 server_recovery_disabled`; no session, configuration switch or migration
+header can disclose the existing escrow or create new escrow. Legacy migration
+requires the user's existing recovery code or a device retaining its keys.
+Application-key backup/rotation remains necessary for retained legacy escrow
+and session receipts.
+Deleting escrow does not erase historical backups or knowledge already held by
+the server. Migrating away from custody requires new data keys and reciphering.
+
+### Durable rotation
+
+`POST /crypto/rotation` accepts `crypto`, `operation_id`, the new `key_id` and
+`encrypted_bundle`, the complete `keys` array (old keys rewrapped plus the new
+one), `identity_key`, and `registry_auth`. It atomically makes the new key active,
+sets custody to `transition`, and retains old escrow until completion. Exact
+replay of the same operation and request recovers current state; a changed body
+with the same operation ID fails. A second rotation cannot start while the first
+is rewriting. Old standalone rotate/rewrap endpoints now reject writes because
+they cannot preserve the authenticated registry.
+
+`GET /crypto/rotation` returns the same full state as `/crypto/state`. Its rotation
+contains `operation_id`, `target_key_id`, `source_key_ids`, `phase`
+(`rewriting` or `complete`), and integer `live_records`/`journal_records` counts.
+`GET /crypto/rotation/records?limit=100&cursor=...` returns
+`{rotation_id, records, has_more, next_cursor}`; each entry has `collection`,
+`generation` and the ordinary `record`. The account/rotation-bound encrypted
+cursor pages current records needing reciphering, including legacy tombstones
+and live `h1:` history IDs. Repeat from a null cursor after a pass to catch
+concurrent changes. The client must authenticate and transform each record,
+persist its work, then upload with ordinary CAS operations. Empty legacy
+tombstones cannot be transformed into authenticated deletes based solely on the
+server response; clients must quarantine them or reconcile against trusted local
+state. A page is not an
+acknowledgement and has no cryptographic authority by itself.
+
+`POST /crypto/rotation/history-id` atomically migrates a live historical locator.
+It accepts `crypto`, `operation_id`, `rotation_id`, `generation`, `source_id`
+(`h1:` plus 64 hex characters), `source_revision`, `target_id` (`h2:` plus 64 hex),
+`source_payload` (authenticated schema-2 tombstone), and `target_payload`
+(authenticated schema-2 creation). Optional `target_ttl` must match the source's
+current TTL, including an expired timestamp, and the authenticated target body;
+the source tombstone has null TTL. The target must not exist, even as a tombstone.
+The source CAS, target creation, both changes and replay receipt commit together;
+the source payload is replaced first so quota needs only the final tombstone and
+target payload sizes. Invalid metadata, quota failure or a collision rolls
+everything back. Response
+contains both IDs and their new revisions. The client must reconcile an existing
+target rather than overwrite it. A source tombstone retires only the old locator;
+it must not delete the visits just moved to the new locator.
+Source CAS/TTL mismatch returns `history_source_conflict`; an existing target
+returns `history_target_exists`. Exact receipt replay still succeeds after
+completion advanced the crypto revision, with the same epoch, device and content.
+
+`POST /crypto/rotation/complete` takes `crypto`, `operation_id` and a new
+`registry_auth` authenticating custody `client`, `server_recovery: false` and
+rotation phase `complete`. It requires zero current records needing
+reciphering/ID migration and atomically replaces the tag, removes old escrow,
+and changes custody and phase. **It does not retire old data-key bundles.**
+Those may still be needed to open retained journal entries. Exact completion
+replay recovers state without advancing revisions or overwriting its tag again.
+
+`DELETE /crypto/native-keys/{keyId}` takes `crypto` and a new `registry_auth` for
+the remaining registry. It refuses active/identity keys, unfinished transitions,
+and any key referenced by current records or retained journal snapshots. Unknown
+or malformed historical ciphertext blocks retirement conservatively. Journal
+compaction remains a separate prerequisite for retiring used keys; rotation
+completion is not a claim that all old keys or historical ciphertext disappeared.
+
+### Authenticated record controls
+
+Client/transition writes require `context.schema_version: 2`. The AEAD plaintext
+wraps `{version: 2, deleted, ttl, value}`. Encrypted tombstones retain a nonempty
+payload in both records and change snapshots. The server validates only public
+envelope metadata, never plaintext. The receiver verifies inner `deleted` and
+`ttl` against outer metadata before applying anything. TTL is normalized to UTC
+whole seconds by the transport; clients must compare canonical instants.
+
+The server expiry job never manufactures tombstones for client/transition
+accounts, because it cannot authenticate them. Clients enforce authenticated TTL
+while the ciphertext remains retrievable. Retained ciphertext, including encrypted
+tombstones/expired client records, counts toward record quota; journal/receipt
+physical storage still needs its separate retention budget.
+
+Authenticated global reset/history-clear controls are not implemented:
+`client_recovery.authenticated_controls` is false. Native history-clear and data
+wipe reject client/transition requests with `authenticated_control_required`.
+Clients must not treat an unsigned reset marker or a bare legacy tombstone as
+authenticated permission to erase local data. Existing server-custody accounts
+retain their previous control semantics. Administrative web data deletion remains
+an explicit owner operation, not an authenticated client control.
+
+### Validation and local integration
+
+Use an isolated PostgreSQL database named `midori_sync_test_*`; the shared test
+base checks this before `RefreshDatabase` can run. Never execute schema resets
+against the live service database. Apply the H1 migration incrementally to an
+existing installation, not with `migrate:fresh`.
+
+For tests against an already running loopback service on port 8000,
+`php artisan sync:test-account --fresh` creates a uniquely marked synthetic
+`h1.*@local.invalid` account and writes four short-lived pairing codes into
+`/tmp/midori-sync-h1-fixture.json` with mode 0600. It validates the running issuer
+and custody capability, does not start another server, and never prints codes.
+Without `--fresh`, it renews codes for only the account identified by that private
+fixture, preserving data for continuation. `--fresh` does not delete previous
+synthetic accounts or touch real users. Archive logs without including this file.
+
 ## Routes
 
 | Method | Path below `/api/v1` | Purpose |
@@ -33,8 +169,14 @@ follows the [OpenAPI specification](https://spec.openapis.org/oas/v3.1.0.html).
 | POST | `/sync/collections/{name}/operations` | Conditional, idempotent writes with individual outcomes |
 | GET | `/crypto/state` | Native key registry, activation state and conditional-write epoch/revision |
 | POST | `/crypto/activate` | Activate V2 for an empty account with explicit handling of incompatible sessions |
-| POST | `/crypto/rotate` | Register a new active key while retaining previous recovery bundles |
-| PUT | `/crypto/native-keys/{keyId}` | Replace one wrapped recovery bundle conditionally |
+| GET/POST | `/crypto/recovery` | Disabled; never disclose or create server recovery escrow |
+| GET/POST | `/crypto/rotation` | Read state or start a resumable authenticated key rotation |
+| GET | `/crypto/rotation/records` | Page current records requiring reciphering or history-ID migration |
+| POST | `/crypto/rotation/history-id` | Atomically create the new history locator and tombstone the old locator |
+| POST | `/crypto/rotation/complete` | Finish current-record migration and remove legacy escrow |
+| DELETE | `/crypto/native-keys/{keyId}` | Retire a key only without current or journal references |
+| POST | `/crypto/rotate` | Disabled; use resumable rotation |
+| PUT | `/crypto/native-keys/{keyId}` | Disabled; use resumable rotation |
 | DELETE | `/sync/data` | Explicit conditional erasure of Sync data and key bundles |
 
 The three collection routes require a valid bearer session bound to a device
@@ -238,7 +380,9 @@ First read the collection feed to obtain its current generation. Example body:
 Generate a fresh UUID per logical operation and persist it in the client outbox
 before sending. `base_revision: "0"` means the record must not exist. Existing
 records, including tombstones, require their current revision. Deletion uses
-`deleted: true`; omit the payload or send an empty one. TTL is optional. The
+`deleted: true`; historical server-custody accounts omit the payload or send an
+empty one, while client/transition custody requires the authenticated schema-2
+tombstone payload. TTL is optional. The
 server never decrypts record contents. In native mode it validates the public
 envelope metadata described below before accepting a new operation.
 
@@ -251,10 +395,10 @@ Capabilities advertise `crypto_state_version: 1` and native `crypto_versions: [2
 `native_ready` remains false. All native key endpoints require a live version-2
 session, an owned device and a bound account identity. They recheck the session
 inside the account transaction and lock its row against concurrent revocation.
-They return `Cache-Control: no-store`. Native activation and recovery escrow
-now receive a recovery secret, encrypted under the Laravel application key at
-rest. This permits account login alone to restore a new device, but the server
-is no longer unable to recover client keys. Protect and back up `APP_KEY`.
+They return `Cache-Control: no-store`. New native activation uses client custody
+as specified above. Historical escrow remains encrypted under the Laravel
+application key until migration completes; protect and back up `APP_KEY` for
+this retained material and authentication receipts.
 
 `GET /crypto/state` creates a state row lazily and returns:
 
@@ -268,6 +412,10 @@ is no longer unable to recover client keys. Protect and back up `APP_KEY`.
   "incompatible_sessions": 0,
   "migration_required": false,
   "server_recovery": false,
+  "custody": "server",
+  "identity_key": null,
+  "registry_auth": null,
+  "rotation": null,
   "keys": []
 }
 ```
@@ -285,7 +433,8 @@ can explain the migration requirement before generating a recovery code. This
 is a snapshot for presentation; activation rechecks the same condition under
 the account lock and never relies on an earlier client check.
 
-Activation and rotation requests contain:
+Activation and rotation requests include these common fields, in addition to
+the required identity, registry authentication and rotation fields specified above:
 
 ```json
 {
@@ -298,17 +447,10 @@ Activation and rotation requests contain:
 }
 ```
 
-New native activation also sends `recovery_secret`, a 64-character lowercase
-hexadecimal value used to wrap its key. The server stores it encrypted in the
-same transaction as activation. `server_recovery` advertises whether the
-current epoch has such a secret. `GET /crypto/recovery` returns the epoch,
-revision and secret only to an authenticated, device-bound version-2 session;
-the client checks the epoch and revision before decrypting the bundles.
-`POST /crypto/recovery` accepts the current `crypto` context, that secret, and
-the complete `keys` array of freshly wrapped bundles. It changes all bundles
-and the escrow atomically, allowing an existing browser with all local keys to
-enable login-only recovery without the old code. A browser without those keys
-cannot invent them; an old account then needs its recovery code once.
+Historical native activation uploaded `recovery_secret`; this is now prohibited.
+`server_recovery` advertises whether the current epoch still has historical
+escrow. Both recovery endpoints reject all authenticated requests; restoring
+keys requires a user-held code or an existing device with the local keys.
 
 `crypto.revision` is a decimal string, distinct from the old integer bundle
 counter and from record revisions. The epoch and revision must exactly match
@@ -342,20 +484,18 @@ match the operation. Unknown/incorrect fields and sizes yield an item-level
 receipt is returned before applying the current active-key check, so an
 already-applied operation can still be resolved after rotation; the request
 must first refresh its `crypto` precondition. Deletes retain the ordinary
-authenticated, conditional tombstone contract. Server TTL cleanup remains
-authorized to emit tombstones.
+conditional tombstone contract. Client/transition tombstones additionally carry
+authenticated controls, and server TTL cleanup cannot emit tombstones for them.
 
-`POST /crypto/rotate` registers a different key ID, makes it active and retains
-all earlier bundles and encrypted records. It does not recipher records or
-complete a multi-device rotation. `PUT /crypto/native-keys/{keyId}` accepts
-`crypto` and `encrypted_bundle` to rewrap an existing key without changing the
-active key. Both operations clear server recovery until a client escrows a
-complete new set of bundles. Reusing a registered ID for rotation returns `409 key_id_exists`;
-exceeding eight retained keys returns `409 key_capacity_reached`. Retirement,
-safe pruning and resumable client reciphering
-remain pending. The server exposes no unsafe key-deletion shortcut.
+`POST /crypto/rotate` and `PUT /crypto/native-keys/{keyId}` now reject writes with
+`409 durable_rotation_required`; use the resumable rotation contract above.
+Reusing a registered ID for rotation returns `409 key_id_exists`; exceeding eight
+retained data keys returns `409 key_capacity_reached`. Identity has its own slot.
+Safe retirement checks both current records and retained journal snapshots.
 
-`DELETE /sync/data` takes the current `crypto` object. It removes Sync records,
+For historical server-custody accounts, `DELETE /sync/data` takes the current
+`crypto` object. Client/transition custody rejects this unauthenticated control.
+The historical route removes Sync records,
 bundles, receipts and acknowledgements, and rotates both the key-state epoch
 and collection generations. A native account
 stays native with no active key, and can activate a new key against the new
@@ -378,6 +518,12 @@ and change are committed together; rollback leaves no committed sequence gap.
 Different accounts remain independent. This serialization favors correctness;
 measure contention before optimizing the lock scope.
 
+Feed reads and acknowledgements recheck the live version-2 session, owned device
+and bound identity after acquiring the same account lock. A request admitted by
+middleware before session revocation cannot read or acknowledge after that
+revocation commits. Key-registry reads and rotation-record export use this same
+transactional authorization check.
+
 Legacy upsert/batch/delete and expiry paths append to this same journal.
 Collection deletion and TTL cleanup now retain versioned tombstones. A full
 account data wipe deletes payloads and rotates stream generations. The journal
@@ -393,7 +539,26 @@ The complete Desktop migration and popup are tracked in the parent repository's
 
 ## Validation
 
-`native-sync.openapi.json` passed `openapi-spec-validator` 0.7.2. All 13
+H1 validation on 2026-10-15: the PostgreSQL suite passed 203 tests and 1801
+assertions (`artifacts/h1-backend-full-verified.log`). After the additional
+history TTL/replay and malformed-ciphertext retirement fixes, the three affected
+suites passed 32 tests and 584 assertions
+(`artifacts/h1-backend-final-regression.log`). Final focused checks after the
+quota and session-revocation fixes:
+54 crypto/concurrency tests with 832 assertions
+(`artifacts/h1-session-revocation-regression.log`), 28 HTTP feed/operations/history
+tests with 221 assertions (`artifacts/h1-feed-revocation-regression.log`), and
+16 custody tests with 254 assertions (`artifacts/h1-custody-final-regression.log`).
+The concurrency cases admit a request before revocation, verify an actual
+PostgreSQL lock wait, and distinguish committed revocation from rollback.
+These tests validate server
+transactions and envelope metadata; they do not prove native client AEAD.
+The updated OpenAPI JSON has 292 resolving references and 28 unique operations;
+27 match Laravel routes and the stream is served by its notification daemon
+(`artifacts/h1-openapi-final-review.log`). A formal OpenAPI validator was not available
+for this revision.
+
+The pre-H1 `native-sync.openapi.json` passed `openapi-spec-validator` 0.7.2. All 13
 documented operations match the route inventory emitted by `php artisan
 route:list --path=api/v1 --json`; its 155 internal references resolve and all
 operation IDs are unique. Evidence in Desktop: `artifacts/sync-openapi-validation.log`

@@ -53,7 +53,13 @@ Route::prefix('v1')->middleware(SyncApiCors::class)->group(function () {
         Route::post('/crypto/recovery', [NativeCryptoController::class, 'escrow'])->middleware('throttle:sync');
         Route::post('/crypto/activate', [NativeCryptoController::class, 'activate']);
         Route::post('/crypto/rotate', [NativeCryptoController::class, 'rotate']);
+        Route::get('/crypto/rotation', [NativeCryptoController::class, 'show']);
+        Route::post('/crypto/rotation', [NativeCryptoController::class, 'startRotation']);
+        Route::get('/crypto/rotation/records', [NativeCryptoController::class, 'rotationRecords']);
+        Route::post('/crypto/rotation/complete', [NativeCryptoController::class, 'completeRotation']);
+        Route::post('/crypto/rotation/history-id', [NativeCryptoController::class, 'migrateHistoryId']);
         Route::put('/crypto/native-keys/{keyId}', [NativeCryptoController::class, 'rewrap']);
+        Route::delete('/crypto/native-keys/{keyId}', [NativeCryptoController::class, 'retire']);
         Route::delete('/sync/data', [NativeCryptoController::class, 'wipe']);
     });
 });

@@ -9,7 +9,7 @@ description.
 
 ## Overview
 
-Midori Sync uses **end-to-end encryption (E2EE)**. The server never has access to plaintext Sync records. The legacy format described here was encrypted by the retired extension; native Desktop uses its Rust crypto component.
+This is a historical format description, not a statement of current account guarantees. Native client custody and the transition from server-held recovery are specified in [native-sync-api.md](native-sync-api.md#client-custody-extension-2026-10-15). Historical server-custody accounts have server-recoverable keys; new client-custody accounts never upload the recovery code. The retired extension encrypted the legacy format below.
 
 ## Algorithms
 
@@ -233,8 +233,8 @@ caller supplies the *current* passphrase and a new passphrase.
 
 ## Security Properties
 
-- **Zero-knowledge server**: server stores only encrypted blobs.
-- **Forward secrecy across records**: each record uses a random nonce.
+- **Historical client-only key custody**: the legacy format assumed the server held only wrapped keys. This is not true for accounts using server recovery; consult the native custody state.
+- **Randomized record encryption**: each record uses a fresh random nonce. This does not provide forward secrecy if a long-lived data key is later compromised.
 - **Authenticated encryption**: XChaCha20-Poly1305 is an AEAD cipher;
   any tampering causes decryption to fail.
 - **Memory-hard KDF**: Argon2id with 64 MB raises the cost of brute-force

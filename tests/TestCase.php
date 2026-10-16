@@ -13,6 +13,18 @@ use Illuminate\Support\Str;
 
 abstract class TestCase extends BaseTestCase
 {
+    public function createApplication()
+    {
+        $app = parent::createApplication();
+        $connection = $app['db']->connection();
+        if (! $app->environment('testing') || $connection->getDriverName() !== 'pgsql' ||
+            ! preg_match('/^midori_sync_test(_[a-z0-9]+)*$/D', $connection->getDatabaseName())) {
+            throw new \RuntimeException('Tests require an isolated midori_sync_test_* PostgreSQL database.');
+        }
+
+        return $app;
+    }
+
     protected function setUp(): void
     {
         parent::setUp();

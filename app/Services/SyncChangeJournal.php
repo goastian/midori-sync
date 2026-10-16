@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Exceptions\SyncProtocolException;
 use App\Models\Device;
 use App\Models\Record;
+use App\Models\SyncSession;
 use App\Models\User;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Query\Builder;
@@ -18,6 +19,8 @@ class SyncChangeJournal
     public const MAX_PAGE_SIZE = 100;
 
     public const MAX_PAGE_BYTES = 4194304;
+
+    public function __construct(private SyncIdentityService $identity) {}
 
     public function lockUser(int $userId): User
     {
@@ -68,7 +71,7 @@ class SyncChangeJournal
                 'record' => json_encode([
                     'id' => $record->record_id,
                     'revision' => (string) $record->version,
-                    'payload' => $record->deleted ? '' : $record->payload,
+                    'payload' => $record->payload,
                     'deleted' => $record->deleted,
                     'ttl' => $record->ttl?->toIso8601String(),
                 ], JSON_THROW_ON_ERROR),
@@ -144,15 +147,15 @@ class SyncChangeJournal
         return $generation;
     }
 
-    public function changes(int $userId, int $collectionId, int $deviceId, ?string $cursor, int $limit): array
+    public function changes(int $userId, int $collectionId, int $deviceId, ?string $cursor, int $limit, string $sessionId): array
     {
         if ($limit < 1 || $limit > self::MAX_PAGE_SIZE) {
             throw new SyncProtocolException('invalid_page_size');
         }
 
-        return DB::transaction(function () use ($userId, $collectionId, $deviceId, $cursor, $limit) {
+        return DB::transaction(function () use ($userId, $collectionId, $deviceId, $cursor, $limit, $sessionId) {
             $this->lockUser($userId);
-            $this->requireDevice($userId, $deviceId);
+            $this->requireSession($userId, $sessionId, $deviceId);
             $stream = $this->prepare($userId, $collectionId);
             $position = $cursor ? $this->decodeCursor($cursor, $stream, $deviceId) : null;
             $after = $position ? (int) $position['sequence'] : 0;
@@ -200,11 +203,11 @@ class SyncChangeJournal
         }, 5);
     }
 
-    public function acknowledge(int $userId, int $collectionId, int $deviceId, string $cursor): array
+    public function acknowledge(int $userId, int $collectionId, int $deviceId, string $cursor, string $sessionId): array
     {
-        return DB::transaction(function () use ($userId, $collectionId, $deviceId, $cursor) {
+        return DB::transaction(function () use ($userId, $collectionId, $deviceId, $cursor, $sessionId) {
             $this->lockUser($userId);
-            $this->requireDevice($userId, $deviceId);
+            $this->requireSession($userId, $sessionId, $deviceId);
             $stream = $this->prepare($userId, $collectionId);
             $position = $this->decodeCursor($cursor, $stream, $deviceId);
             $query = DB::table('sync_device_cursors')->where('stream_id', $stream->id)->where('device_id', $deviceId);
@@ -277,6 +280,25 @@ class SyncChangeJournal
         if (! Device::whereKey($deviceId)->where('user_id', $userId)->exists()) {
             throw new SyncProtocolException('device_required', 409);
         }
+    }
+
+    public function requireSession(int $userId, string $sessionId, ?int $deviceId = null): SyncSession
+    {
+        $this->requireTransaction();
+        $session = SyncSession::whereKey($sessionId)->where('user_id', $userId)->valid()->lockForUpdate()->first();
+        if (! $session) {
+            throw new SyncProtocolException('auth_required', 401);
+        }
+        if ($session->protocol_version !== 2) {
+            throw new SyncProtocolException('client_upgrade_required', 426);
+        }
+        if (! $session->device_id || ($deviceId !== null && $session->device_id !== $deviceId)) {
+            throw new SyncProtocolException('device_required', 409);
+        }
+        $this->requireDevice($userId, $session->device_id);
+        $this->identity->forUser(User::findOrFail($userId));
+
+        return $session;
     }
 
     private function requireTransaction(): void

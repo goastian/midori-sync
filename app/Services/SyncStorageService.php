@@ -85,24 +85,24 @@ class SyncStorageService
         return $record ? $this->formatRecord($record) : null;
     }
 
-    public function getChanges(int $userId, string $collectionName, int $deviceId, ?string $cursor, int $limit): array
+    public function getChanges(int $userId, string $collectionName, int $deviceId, ?string $cursor, int $limit, string $sessionId): array
     {
         $collection = $this->resolveCollection($collectionName);
         if (! $collection) {
             throw new SyncProtocolException('unknown_collection', 404);
         }
 
-        return $this->journal->changes($userId, $collection->id, $deviceId, $cursor, $limit);
+        return $this->journal->changes($userId, $collection->id, $deviceId, $cursor, $limit, $sessionId);
     }
 
-    public function acknowledgeChanges(int $userId, string $collectionName, int $deviceId, string $cursor): array
+    public function acknowledgeChanges(int $userId, string $collectionName, int $deviceId, string $cursor, string $sessionId): array
     {
         $collection = $this->resolveCollection($collectionName);
         if (! $collection) {
             throw new SyncProtocolException('unknown_collection', 404);
         }
 
-        return $this->journal->acknowledge($userId, $collection->id, $deviceId, $cursor);
+        return $this->journal->acknowledge($userId, $collection->id, $deviceId, $cursor, $sessionId);
     }
 
     public function clearHistory(int $userId, int $deviceId, string $operationId, string $generation, array $cryptoContext): array
@@ -116,7 +116,10 @@ class SyncStorageService
 
         return DB::transaction(function () use ($userId, $deviceId, $operationId, $generation, $cryptoContext, $collection) {
             $this->journal->lockUser($userId);
-            $this->crypto->authorizeWrite($userId, $cryptoContext, $deviceId);
+            $state = $this->crypto->authorizeWrite($userId, $cryptoContext, $deviceId);
+            if ($state && $state->custody !== 'server') {
+                throw new SyncProtocolException('authenticated_control_required', 409);
+            }
             $this->journal->requireDevice($userId, $deviceId);
             $stream = $this->journal->prepare($userId, $collection->id);
             $receipts = DB::table('sync_history_clears')->where('stream_id', $stream->id);
@@ -166,6 +169,67 @@ class SyncStorageService
         ];
     }
 
+    public function migrateHistoryId(int $userId, int $deviceId, array $data): array
+    {
+        $context = $data['crypto'] + ['session_id' => $data['session_id']];
+        $operationId = strtolower($data['operation_id']);
+        $targetTtl = empty($data['target_ttl']) ? null : Carbon::parse($data['target_ttl'])->utc()->startOfSecond()->toIso8601String();
+        $fingerprint = hash('sha256', json_encode([$deviceId, $data['rotation_id'], $data['generation'],
+            $data['source_id'], $data['source_revision'], $data['target_id'], $data['source_payload'], $data['target_payload'], $targetTtl], JSON_THROW_ON_ERROR));
+
+        return DB::transaction(function () use ($userId, $deviceId, $data, $context, $operationId, $fingerprint, $targetTtl) {
+            $this->journal->lockUser($userId);
+            $this->journal->requireDevice($userId, $deviceId);
+            $receipts = DB::table('sync_history_id_migrations')->where('user_id', $userId);
+            $receipt = (clone $receipts)->where('operation_id', $operationId)->first();
+            if ($receipt) {
+                $state = $this->crypto->snapshot($userId, $context['session_id']);
+                if ($context['epoch'] !== $state['epoch']) {
+                    throw new SyncProtocolException('crypto_state_conflict', 409);
+                }
+                if (! hash_equals($receipt->fingerprint, $fingerprint)) {
+                    throw new SyncProtocolException('idempotency_conflict', 409);
+                }
+
+                return json_decode($receipt->response, true, flags: JSON_THROW_ON_ERROR);
+            }
+            $state = $this->crypto->authorizeWrite($userId, $context, $deviceId);
+            $rotation = DB::table('sync_key_rotations')->where('user_id', $userId)->first();
+            if (! $state || $state->custody !== 'transition' || $rotation?->operation_id !== $data['rotation_id'] || $rotation->phase !== 'rewriting') {
+                throw new SyncProtocolException('unknown_rotation', 409);
+            }
+            $collection = $this->resolveCollection('history');
+            $records = Record::where('user_id', $userId)->where('collection_id', $collection->id);
+            $source = (clone $records)->where('record_id', $data['source_id'])->first();
+            if (! $source || $source->deleted || (string) $source->version !== $data['source_revision'] ||
+                $source->ttl?->utc()->startOfSecond()->toIso8601String() !== $targetTtl) {
+                throw new SyncProtocolException('history_source_conflict', 409);
+            }
+            if ((clone $records)->where('record_id', $data['target_id'])->exists()) {
+                throw new SyncProtocolException('history_target_exists', 409);
+            }
+            $operations = [
+                ['operation_id' => (string) Str::uuid(), 'id' => $data['source_id'], 'base_revision' => $data['source_revision'],
+                    'payload' => $data['source_payload'], 'deleted' => true],
+                ['operation_id' => (string) Str::uuid(), 'id' => $data['target_id'], 'base_revision' => '0',
+                    'payload' => $data['target_payload'], 'deleted' => false, 'ttl' => $targetTtl],
+            ];
+            $result = $this->applyOperations($userId, 'history', $deviceId, $data['generation'], $operations, $context);
+            foreach ($result['results'] as $outcome) {
+                if ($outcome['status'] !== 'applied') {
+                    throw new SyncProtocolException('history_migration_'.$outcome['status'], 409);
+                }
+            }
+            $response = ['operation_id' => $operationId, 'rotation_id' => $rotation->operation_id, 'generation' => $data['generation'],
+                'source_id' => $data['source_id'], 'source_revision' => $result['results'][0]['revision'],
+                'target_id' => $data['target_id'], 'target_revision' => $result['results'][1]['revision']];
+            $receipts->insert(['user_id' => $userId, 'operation_id' => $operationId, 'rotation_id' => $rotation->operation_id,
+                'fingerprint' => $fingerprint, 'response' => json_encode($response, JSON_THROW_ON_ERROR), 'created_at' => now()]);
+
+            return $response;
+        }, 5);
+    }
+
     public function applyOperations(int $userId, string $collectionName, int $deviceId, string $generation, array $operations, ?array $cryptoContext = null): array
     {
         if (count($operations) < 1 || count($operations) > 100) {
@@ -179,6 +243,7 @@ class SyncStorageService
         return DB::transaction(function () use ($userId, $collection, $deviceId, $generation, $operations, $cryptoContext) {
             $user = $this->journal->lockUser($userId);
             $cryptoState = $this->crypto->authorizeWrite($userId, $cryptoContext, $deviceId);
+            $protected = $cryptoState && $cryptoState->custody !== 'server';
             $this->journal->requireDevice($userId, $deviceId);
             $stream = $this->journal->prepare($userId, $collection->id);
             if ($stream->generation !== $generation) {
@@ -190,7 +255,7 @@ class SyncStorageService
             $results = [];
             $changed = [];
             foreach ($operations as $index => $operation) {
-                $validated = $this->validateOperation($operation);
+                $validated = $this->validateOperation($operation, $protected);
                 if ($validated === null) {
                     $results[] = ['index' => $index, 'status' => 'invalid'];
 
@@ -208,7 +273,7 @@ class SyncStorageService
                     continue;
                 }
 
-                if ($cryptoState && ! $this->envelope->validRecord($validated, $collection->name, $generation, $cryptoState->active_key_id)) {
+                if ($cryptoState && ! $this->envelope->validRecord($validated, $collection->name, $generation, $cryptoState->active_key_id, $protected ? 2 : 1)) {
                     $results[] = ['index' => $index, 'operation_id' => $operationId, 'status' => 'invalid'];
 
                     continue;
@@ -221,8 +286,8 @@ class SyncStorageService
                 if ($revision !== $validated['base_revision']) {
                     $result += ['status' => 'conflict', 'revision' => $revision];
                 } else {
-                    $oldBytes = $record ? $this->quota->recordBytes($record->payload, $record->deleted, $record->ttl?->toIso8601String(), $quotaTime) : 0;
-                    $delta = $this->quota->recordBytes($validated['payload'], $validated['deleted'], $validated['ttl'], $quotaTime) - $oldBytes;
+                    $oldBytes = $record ? $this->quota->recordBytes($record->payload, $record->deleted, $record->ttl?->toIso8601String(), $quotaTime, $protected) : 0;
+                    $delta = $this->quota->recordBytes($validated['payload'], $validated['deleted'], $validated['ttl'], $quotaTime, $protected) - $oldBytes;
                     try {
                         $this->quota->checkDelta($user, $delta, $usage);
                     } catch (SyncQuotaException $e) {
@@ -262,7 +327,7 @@ class SyncStorageService
         }, 5);
     }
 
-    private function validateOperation(mixed $operation): ?array
+    private function validateOperation(mixed $operation, bool $protected = false): ?array
     {
         if (! is_array($operation)) {
             return null;
@@ -273,7 +338,7 @@ class SyncStorageService
             'operation.id' => ['required', 'string', 'max:255'],
             'operation.base_revision' => ['required', 'string', 'regex:/^(0|[1-9][0-9]{0,9})$/D'],
             'operation.deleted' => ['sometimes', 'boolean'],
-            'operation.payload' => ['required_unless:operation.deleted,true', 'nullable', 'string'],
+            'operation.payload' => [$protected ? 'required' : 'required_unless:operation.deleted,true', 'nullable', 'string'],
             'operation.ttl' => ['nullable', 'date'],
         ]);
         if ($validator->fails() || strlen($operation['payload'] ?? '') > (int) config('services.sync.max_record_size', 262144)) {
@@ -286,7 +351,7 @@ class SyncStorageService
             'operation_id' => strtolower($operation['operation_id']),
             'id' => $operation['id'],
             'base_revision' => $operation['base_revision'],
-            'payload' => $deleted ? '' : $operation['payload'],
+            'payload' => $deleted && ! $protected ? '' : $operation['payload'],
             'deleted' => $deleted,
             'ttl' => $deleted || empty($operation['ttl']) ? null : Carbon::parse($operation['ttl'])->utc()->startOfSecond()->toIso8601String(),
         ];
@@ -607,11 +672,15 @@ class SyncStorageService
     {
         $count = 0;
         Record::where('deleted', false)->where('ttl', '<=', now())
+            ->whereNotIn('user_id', DB::table('sync_crypto_states')->where('custody', '<>', 'server')->select('user_id'))
             ->chunkById(100, function ($records) use (&$count) {
                 foreach ($records->groupBy(['user_id', 'collection_id']) as $userId => $collections) {
                     foreach ($collections as $collectionId => $expired) {
                         $count += DB::transaction(function () use ($userId, $collectionId, $expired) {
                             $this->journal->lockUser($userId);
+                            if (DB::table('sync_crypto_states')->where('user_id', $userId)->where('custody', '<>', 'server')->exists()) {
+                                return 0;
+                            }
                             $this->journal->prepare($userId, $collectionId);
                             $records = Record::whereIn('id', $expired->pluck('id')->all())
                                 ->where('deleted', false)->where('ttl', '<=', now())->get();

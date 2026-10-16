@@ -28,9 +28,9 @@ class SyncNativeEnvelope
         }
     }
 
-    public function validRecord(array $operation, string $collection, string $generation, string $keyId): bool
+    public function validRecord(array $operation, string $collection, string $generation, string $keyId, int $schema = 1): bool
     {
-        if ($operation['deleted']) {
+        if ($operation['deleted'] && $schema === 1) {
             return true;
         }
         $value = $this->decode($operation['payload'], 262144);
@@ -41,9 +41,25 @@ class SyncNativeEnvelope
             $this->supportsCollection($collection) &&
             $value['context']['collection'] === $collection && $value['context']['id'] === $operation['id'] &&
             strlen($operation['id']) <= 255 && ! preg_match('/[\p{Cc}\p{Cs}]/u', $operation['id']) &&
-            $value['context']['generation'] === $generation && $value['context']['schema_version'] === 1 &&
+            $value['context']['generation'] === $generation && $value['context']['schema_version'] === $schema &&
             $value['context']['base_revision'] === $operation['base_revision'] &&
             $this->base64($value['nonce'], 24, 24) && $this->base64($value['ciphertext'], 16, 190016);
+    }
+
+    public function recordKeyId(string $payload): ?string
+    {
+        $value = $this->decode($payload, 262144);
+        $context = is_array($value) ? ($value['context'] ?? null) : null;
+        if (! is_array($context) || ! is_string($value['key_id'] ?? null) || ! $this->keyId($value['key_id']) ||
+            ! is_string($context['collection'] ?? null) || ! is_string($context['generation'] ?? null) ||
+            ! is_string($context['id'] ?? null) || ! is_string($context['base_revision'] ?? null) ||
+            ! in_array($context['schema_version'] ?? null, [1, 2], true)) {
+            return null;
+        }
+        $operation = ['id' => $context['id'], 'base_revision' => $context['base_revision'], 'deleted' => false, 'payload' => $payload];
+
+        return $this->validRecord($operation, $context['collection'], $context['generation'], $value['key_id'], $context['schema_version'])
+            ? $value['key_id'] : null;
     }
 
     private function decode(string $value, int $maximum): mixed

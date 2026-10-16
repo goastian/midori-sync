@@ -60,7 +60,7 @@
       "post": {
         "operationId": "createPairingCode",
         "summary": "Create a short-lived pairing code",
-        "description": "Requires an existing account session. The code is consumed atomically during redemption; the new authenticated native device can then fetch a server-held recovery secret when available.",
+        "description": "Requires an existing account session. The code is consumed atomically during redemption; the new authenticated native device must recover keys using a user-held recovery code or an already trusted device.",
         "responses": {
           "200": {
             "description": "Successful response",
@@ -326,7 +326,7 @@
       "get": {
         "operationId": "getCollectionChanges",
         "summary": "Read a stable page of encrypted changes",
-        "description": "Start without a cursor. Follow next_cursor until has_more=false to finish the snapshot fence; later writes appear on a later poll. Downloading does not acknowledge. The sum of serialized record snapshots is capped at 4 MiB, excluding outer response overhead. Clients must also honor record TTL.",
+        "description": "Start without a cursor. Follow next_cursor until has_more=false to finish the snapshot fence; later writes appear on a later poll. Downloading does not acknowledge. The sum of serialized record snapshots is capped at 4 MiB, excluding outer response overhead. Clients must also honor record TTL. Session, owned device and bound identity are revalidated under the account lock, including requests admitted before a concurrent session revocation.",
         "responses": {
           "200": {
             "description": "Ordered immutable changes within the snapshot fence",
@@ -398,7 +398,7 @@
       "post": {
         "operationId": "acknowledgeCollectionChanges",
         "summary": "Acknowledge durable application of a change page",
-        "description": "Send the received cursor only after all covered records are durably applied or explicitly quarantined. Persist download progress separately when dependencies remain. Repeated or older ACKs cannot reduce the stored position.",
+        "description": "Send the received cursor only after all covered records are durably applied or explicitly quarantined. Persist download progress separately when dependencies remain. Repeated or older ACKs cannot reduce the stored position. Session, owned device and bound identity are revalidated under the account lock, including requests admitted before a concurrent session revocation.",
         "responses": {
           "200": {
             "description": "Monotonic stored acknowledgement",
@@ -557,58 +557,50 @@
     "/crypto/recovery": {
       "get": {
         "operationId": "getServerRecoverySecret",
-        "summary": "Recover native keys after authenticated device login",
-        "description": "Requires a bound version-2 session. Returns the secret encrypted under APP_KEY at rest. The client must match epoch and revision to /crypto/state before unwrapping keys. Responses are no-store.",
+        "summary": "Reject server recovery secret disclosure",
+        "description": "Always rejects authenticated requests with 409 server_recovery_disabled. Legacy escrow is retained for migration rollback but is never disclosed through this API.",
         "responses": {
-          "200": {
-            "description": "Current epoch recovery secret",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RecoveryResponse"
-                }
-              }
-            }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "429": { "$ref": "#/components/responses/RateLimited" }
-        }
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "deprecated": true
       },
       "post": {
         "operationId": "escrowNativeRecoverySecret",
-        "summary": "Atomically publish recovery for all existing native keys",
-        "description": "Requires a bound version-2 session and exact epoch/revision. The submitted set of key IDs must equal the full current registry. Updates all bundles, stores the secret encrypted under APP_KEY and increments revision atomically. Responses are no-store.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/EscrowRequest" }
-            }
+        "summary": "Reject new recovery escrow",
+        "description": "Disabled: use durable client-key rotation. This endpoint never mutates the registry or creates escrow.",
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
-        "responses": {
-          "200": {
-            "description": "Updated crypto state",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/CryptoState" }
-              }
-            }
-          },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "413": { "$ref": "#/components/responses/TooLarge" },
-          "422": { "$ref": "#/components/responses/InvalidRequest" },
-          "429": { "$ref": "#/components/responses/RateLimited" }
-        }
+        "deprecated": true
       }
     },
     "/crypto/activate": {
       "post": {
         "operationId": "activateNativeKeys",
         "summary": "Activate V2 on an empty account",
-        "description": "Requires no legacy records, recovery bundle or retained changes. Explicit revoke_incompatible=true is required to revoke live legacy sessions. Activation and generation reset commit together. Body limit 8192 bytes; bundles 2048 bytes. On a lost response, reread state and verify the exact key ID/bundle before retrying.",
+        "description": "Activate client custody on an empty account with separate identity_key and registry_auth. recovery_secret is prohibited. Body limit 24576 bytes; wrapped bundles 2048 bytes.",
         "responses": {
           "200": {
             "description": "Activated key state",
@@ -663,26 +655,8 @@
       "post": {
         "operationId": "rotateNativeKey",
         "summary": "Register a new active key and retain older bundles",
-        "description": "Body limit 8192 bytes. Does not recipher records, retire keys or complete multi-device rotation. Existing key IDs and capacity exhaustion produce conflicts.",
+        "description": "Disabled: use durable client-key rotation. This endpoint never mutates the registry or creates escrow.",
         "responses": {
-          "200": {
-            "description": "New active key state",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store on successful native data responses and protocol errors."
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CryptoState"
-                }
-              }
-            }
-          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
@@ -711,7 +685,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/crypto/native-keys/{keyId}": {
@@ -728,26 +703,8 @@
       "put": {
         "operationId": "rewrapNativeKey",
         "summary": "Replace an existing wrapped recovery bundle",
-        "description": "Body limit 8192 bytes. The wrapped key ID must match the path. Does not change the active key. The server checks envelope shape; the client must verify recoverability.",
+        "description": "Disabled: use durable client-key rotation. This endpoint never mutates the registry or creates escrow.",
         "responses": {
-          "200": {
-            "description": "Updated recovery bundle and revision",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store on successful native data responses and protocol errors."
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CryptoState"
-                }
-              }
-            }
-          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
@@ -779,6 +736,62 @@
               }
             }
           }
+        },
+        "deprecated": true
+      },
+      "delete": {
+        "operationId": "retireNativeKey",
+        "summary": "Retire an inactive unreferenced key using a new client registry MAC",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CryptoState"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetireKeyRequest"
+              }
+            }
+          }
         }
       }
     },
@@ -786,7 +799,7 @@
       "delete": {
         "operationId": "eraseSyncData",
         "summary": "Explicitly erase Sync data and rotate generations",
-        "description": "Body limit 8192 bytes. Removes Sync records, key bundles, receipts and acknowledgements atomically. Rotates key epoch and stream generations. A native account remains native with no active key; legacy writing is not reenabled. Clients must reconcile the reset, never blindly republish old local data.",
+        "description": "Body limit 8192 bytes. Removes Sync records, key bundles, receipts and acknowledgements atomically. Rotates key epoch and stream generations. A native account remains native with no active key; legacy writing is not reenabled. Clients must reconcile the reset, never blindly republish old local data. Client/transition custody returns 409 authenticated_control_required until authenticated global controls exist.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1077,7 +1090,7 @@
       "post": {
         "operationId": "clearHistoryAcrossDevices",
         "summary": "Clear synchronized history across devices",
-        "description": "Native version-2 session only. The authenticated transaction removes history records, changes and outstanding operation receipts, rotates only the history generation, and records a durable cutoff. A retry with the same operation_id and previous generation returns the original response. Old cursors and writes fail with reset_required. Clients must process the history_clear marker before capturing or uploading local history.",
+        "description": "Native version-2 session only. The authenticated transaction removes history records, changes and outstanding operation receipts, rotates only the history generation, and records a durable cutoff. A retry with the same operation_id and previous generation returns the original response. Old cursors and writes fail with reset_required. Clients must process the history_clear marker before capturing or uploading local history. Client/transition custody returns 409 authenticated_control_required until authenticated global controls exist.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1120,6 +1133,316 @@
             "$ref": "#/components/responses/RateLimited"
           }
         }
+      }
+    },
+    "/crypto/rotation": {
+      "get": {
+        "operationId": "getKeyRotation",
+        "summary": "Get crypto state and durable rotation progress",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CryptoState"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "operationId": "startKeyRotation",
+        "summary": "Start or recover a conditional idempotent client key rotation",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CryptoState"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotationRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/crypto/rotation/complete": {
+      "post": {
+        "operationId": "completeKeyRotation",
+        "summary": "Finish reciphering with a new client registry MAC and remove legacy escrow",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CryptoState"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteRotationRequest"
+              }
+            }
+          }
+        },
+        "description": "Requires a new registry_auth for custody client, server_recovery false and phase complete. Atomically applies that tag, removes legacy escrow and marks complete only after no current records need reciphering or history-ID migration. Retained journal snapshots keep old keys in use. Replay returns current state without replacing the committed tag."
+      }
+    },
+    "/crypto/rotation/records": {
+      "get": {
+        "operationId": "getRotationRecords",
+        "summary": "Page current records needing reciphering or history-ID migration",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotationRecordPage"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "$ref": "#/components/schemas/Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
+            }
+          }
+        ]
+      }
+    },
+    "/crypto/rotation/history-id": {
+      "post": {
+        "operationId": "migrateHistoryRecordId",
+        "summary": "Atomically create an opaque history ID and authenticate the old locator tombstone",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryIdMigrationResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store on successful native data responses and protocol errors."
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryIdMigrationRequest"
+              }
+            }
+          }
+        },
+        "description": "Atomically creates the h2 target and authenticates the h1 tombstone. Target TTL must preserve the source TTL. Replay returns the durable result after completion despite an older crypto revision, but requires the same epoch, device and content. Source CAS failure is history_source_conflict; an existing target is history_target_exists. The source payload is replaced before creating the target, so quota requires only the final tombstone and target sizes; quota failure rolls back both changes and all receipts. Request limit is 600000 UTF-8 bytes."
+      }
+    },
+    "/auth/browser-token": {
+      "post": {
+        "operationId": "exchangeBrowserAuthorization",
+        "summary": "Redeem a one-use PKCE-bound Desktop authorization",
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "201": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativePairResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserTokenRequest"
+              }
+            }
+          }
+        },
+        "security": []
       }
     }
   },
@@ -1558,6 +1881,43 @@
               "$ref": "#/components/schemas/WrappedKey"
             },
             "maxItems": 8
+          },
+          "custody": {
+            "enum": [
+              "server",
+              "transition",
+              "client"
+            ]
+          },
+          "identity_key": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WrappedKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "registry_auth": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RegistryAuth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rotation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Rotation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1570,7 +1930,11 @@
           "migration_required",
           "legacy_frozen",
           "server_recovery",
-          "keys"
+          "keys",
+          "custody",
+          "identity_key",
+          "registry_auth",
+          "rotation"
         ]
       },
       "Account": {
@@ -1875,6 +2239,24 @@
                   "sessions_per_account"
                 ],
                 "additionalProperties": false
+              },
+              "browser_login": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "version": {
+                        "const": 1
+                      }
+                    },
+                    "required": [
+                      "version"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -1942,6 +2324,37 @@
               "operation_batch_records",
               "operation_batch_bytes"
             ]
+          },
+          "crypto_custody_version": {
+            "const": 1
+          },
+          "record_schema_versions": {
+            "type": "array",
+            "items": {
+              "enum": [
+                1,
+                2
+              ]
+            }
+          },
+          "client_recovery": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "rotation_version": {
+                "const": 1
+              },
+              "authenticated_controls": {
+                "const": false
+              }
+            },
+            "required": [
+              "version",
+              "rotation_version",
+              "authenticated_controls"
+            ]
           }
         },
         "required": [
@@ -1968,7 +2381,7 @@
           },
           "payload": {
             "type": "string",
-            "description": "Opaque ciphertext; empty for tombstones. Native records use a V2 purpose=record envelope. Limits are in bytes from capabilities, not Unicode character counts."
+            "description": "Opaque ciphertext, including schema-2 tombstones. Only legacy tombstones have an empty payload. Clients authenticate deleted/ttl inside the plaintext wrapper before applying metadata."
           },
           "deleted": {
             "type": "boolean"
@@ -2086,7 +2499,7 @@
           },
           "payload": {
             "type": "string",
-            "description": "V2 record-envelope JSON using the active key. Envelope context must match collection, record ID, generation, schema_version=1 and base_revision. Native envelope hard limit: 262144 UTF-8 bytes, also subject to the configured record limit. For a tombstone, omit or send an empty string.",
+            "description": "V2 envelope binding collection/id/generation/base_revision and schema 2 in client/transition custody (schema 1 for server custody). Schema 2 is mandatory even for deletions and encrypts {version:2,deleted,ttl,value}; payload must not be empty. Server validates public metadata, never AEAD plaintext.",
             "contentMediaType": "application/json",
             "contentSchema": {
               "$ref": "#/components/schemas/NativeRecordEnvelope"
@@ -2110,38 +2523,7 @@
           "id",
           "base_revision"
         ],
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "deleted": {
-                  "const": true
-                }
-              },
-              "required": [
-                "deleted"
-              ]
-            },
-            "then": {
-              "properties": {
-                "payload": {
-                  "const": ""
-                }
-              }
-            },
-            "else": {
-              "required": [
-                "payload"
-              ],
-              "properties": {
-                "payload": {
-                  "minLength": 1
-                }
-              }
-            }
-          }
-        ]
+        "additionalProperties": false
       },
       "OperationsRequest": {
         "type": "object",
@@ -2305,46 +2687,32 @@
           "encrypted_bundle": {
             "$ref": "#/components/schemas/WrappedKey/properties/encrypted_bundle"
           },
-          "recovery_secret": {
-            "$ref": "#/components/schemas/RecoverySecret"
-          },
+          "recovery_secret": false,
           "revoke_incompatible": {
             "type": "boolean",
             "default": false
+          },
+          "identity_key": {
+            "$ref": "#/components/schemas/WrappedKey"
+          },
+          "registry_auth": {
+            "$ref": "#/components/schemas/RegistryAuth"
+          },
+          "custody": {
+            "const": "client"
           }
         },
         "required": [
           "crypto",
           "key_id",
-          "encrypted_bundle"
+          "encrypted_bundle",
+          "identity_key",
+          "registry_auth"
         ]
       },
       "RecoverySecret": {
         "type": "string",
         "pattern": "^[0-9a-f]{64}$"
-      },
-      "RecoveryResponse": {
-        "type": "object",
-        "properties": {
-          "epoch": { "$ref": "#/components/schemas/UUID" },
-          "revision": { "$ref": "#/components/schemas/Revision" },
-          "recovery_secret": { "$ref": "#/components/schemas/RecoverySecret" }
-        },
-        "required": ["epoch", "revision", "recovery_secret"]
-      },
-      "EscrowRequest": {
-        "type": "object",
-        "properties": {
-          "crypto": { "$ref": "#/components/schemas/CryptoContext" },
-          "keys": {
-            "type": "array",
-            "items": { "$ref": "#/components/schemas/WrappedKey" },
-            "minItems": 1,
-            "maxItems": 8
-          },
-          "recovery_secret": { "$ref": "#/components/schemas/RecoverySecret" }
-        },
-        "required": ["crypto", "keys", "recovery_secret"]
       },
       "RotateRequest": {
         "type": "object",
@@ -2483,7 +2851,10 @@
           },
           "schema_version": {
             "type": "integer",
-            "const": 1
+            "enum": [
+              1,
+              2
+            ]
           },
           "base_revision": {
             "$ref": "#/components/schemas/Revision"
@@ -2708,6 +3079,289 @@
           "generation",
           "clear_before",
           "deleted_records"
+        ]
+      },
+      "RegistryAuth": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$",
+        "description": "Opaque client MAC authenticating epoch, active data key, wrapped identity key, sorted complete wrapped data-key registry, custody, server_recovery and stable rotation metadata. Excludes revision and progress counters; client verifies after recovering its identity key."
+      },
+      "Rotation": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "target_key_id": {
+            "$ref": "#/components/schemas/KeyId"
+          },
+          "source_key_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyId"
+            }
+          },
+          "phase": {
+            "enum": [
+              "rewriting",
+              "complete"
+            ]
+          },
+          "live_records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "journal_records": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "operation_id",
+          "target_key_id",
+          "source_key_ids",
+          "phase",
+          "live_records",
+          "journal_records"
+        ]
+      },
+      "RotationRequest": {
+        "type": "object",
+        "properties": {
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "key_id": {
+            "$ref": "#/components/schemas/KeyId"
+          },
+          "encrypted_bundle": {
+            "$ref": "#/components/schemas/WrappedKey/properties/encrypted_bundle"
+          },
+          "keys": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/components/schemas/WrappedKey"
+            }
+          },
+          "identity_key": {
+            "$ref": "#/components/schemas/WrappedKey"
+          },
+          "registry_auth": {
+            "$ref": "#/components/schemas/RegistryAuth"
+          },
+          "recovery_secret": false
+        },
+        "required": [
+          "crypto",
+          "operation_id",
+          "key_id",
+          "encrypted_bundle",
+          "keys",
+          "identity_key",
+          "registry_auth"
+        ]
+      },
+      "CompleteRotationRequest": {
+        "type": "object",
+        "properties": {
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "registry_auth": {
+            "$ref": "#/components/schemas/RegistryAuth"
+          },
+          "recovery_secret": false
+        },
+        "required": [
+          "crypto",
+          "operation_id",
+          "registry_auth"
+        ]
+      },
+      "RetireKeyRequest": {
+        "type": "object",
+        "properties": {
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          },
+          "registry_auth": {
+            "$ref": "#/components/schemas/RegistryAuth"
+          }
+        },
+        "required": [
+          "crypto",
+          "registry_auth"
+        ]
+      },
+      "RotationRecordPage": {
+        "type": "object",
+        "properties": {
+          "rotation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "collection": {
+                  "$ref": "#/components/schemas/Collection"
+                },
+                "generation": {
+                  "$ref": "#/components/schemas/UUID"
+                },
+                "record": {
+                  "$ref": "#/components/schemas/Record"
+                }
+              },
+              "required": [
+                "collection",
+                "generation",
+                "record"
+              ]
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Cursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "rotation_id",
+          "records",
+          "has_more",
+          "next_cursor"
+        ]
+      },
+      "HistoryIdMigrationRequest": {
+        "type": "object",
+        "properties": {
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "rotation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "source_id": {
+            "type": "string",
+            "pattern": "^h1:[0-9a-f]{64}$"
+          },
+          "source_revision": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,9}$"
+          },
+          "target_id": {
+            "type": "string",
+            "pattern": "^h2:[0-9a-f]{64}$"
+          },
+          "source_payload": {
+            "type": "string"
+          },
+          "target_payload": {
+            "type": "string"
+          },
+          "target_ttl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 64,
+            "description": "Must match the current source TTL, normalized to UTC whole seconds. Past timestamps are allowed; authenticated target payload must preserve this TTL."
+          }
+        },
+        "required": [
+          "crypto",
+          "operation_id",
+          "rotation_id",
+          "generation",
+          "source_id",
+          "source_revision",
+          "target_id",
+          "source_payload",
+          "target_payload"
+        ]
+      },
+      "HistoryIdMigrationResponse": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "rotation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "source_id": {
+            "type": "string",
+            "pattern": "^h1:[0-9a-f]{64}$"
+          },
+          "source_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "target_id": {
+            "type": "string",
+            "pattern": "^h2:[0-9a-f]{64}$"
+          },
+          "target_revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "operation_id",
+          "rotation_id",
+          "generation",
+          "source_id",
+          "source_revision",
+          "target_id",
+          "target_revision"
+        ]
+      },
+      "BrowserTokenRequest": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "code_verifier": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43,128}$"
+          },
+          "device_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "code",
+          "code_verifier",
+          "device_name"
         ]
       }
     }

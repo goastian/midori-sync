@@ -8,6 +8,7 @@ use App\Models\Device;
 use App\Models\Record;
 use App\Models\SyncSession;
 use App\Models\User;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
@@ -31,11 +32,13 @@ class SyncNativeCryptoService
         }, 5);
     }
 
-    public function activate(int $userId, array $context, string $keyId, string $bundle, bool $revokeIncompatible, ?string $recoverySecret = null): array
+    public function activate(int $userId, array $context, string $keyId, string $bundle, bool $revokeIncompatible, ?array $identityKey = null, string $registryAuth = ''): array
     {
         $this->envelope->validateBundle($keyId, $bundle);
+        $this->validateIdentityKey($identityKey, [$keyId]);
+        $this->validateRegistryAuth($registryAuth);
 
-        return DB::transaction(function () use ($userId, $context, $keyId, $bundle, $revokeIncompatible, $recoverySecret) {
+        return DB::transaction(function () use ($userId, $context, $keyId, $bundle, $revokeIncompatible, $identityKey, $registryAuth) {
             $this->journal->lockUser($userId);
             $this->requireSession($userId, $context['session_id']);
             $state = $this->state($userId);
@@ -54,12 +57,12 @@ class SyncNativeCryptoService
                 $legacy->delete();
             }
             $this->insertKey($userId, $keyId, $bundle);
-            if ($recoverySecret !== null) {
-                $this->storeRecoverySecret($userId, $state->epoch, $recoverySecret);
-            }
             $this->journal->resetUser($userId);
             DB::table('sync_crypto_states')->where('user_id', $userId)->update([
                 'native_enabled' => true, 'active_key_id' => $keyId, 'revision' => $state->revision + 1,
+                'custody' => 'client', 'identity_key_id' => $identityKey['key_id'],
+                'identity_bundle' => $identityKey['encrypted_bundle'],
+                'registry_auth' => $registryAuth,
             ]);
 
             return $this->format($this->state($userId));
@@ -68,61 +71,25 @@ class SyncNativeCryptoService
 
     public function recoverySecret(int $userId, string $sessionId): array
     {
-        return DB::transaction(function () use ($userId, $sessionId) {
-            $this->journal->lockUser($userId);
-            $this->requireSession($userId, $sessionId);
-            $state = $this->state($userId);
-            $saved = DB::table('sync_server_recovery')->where('user_id', $userId)->where('epoch', $state->epoch)->first();
-            if (! $state->active_key_id || ! $saved) {
-                throw new SyncProtocolException('recovery_unavailable', 404);
-            }
-
-            return ['epoch' => $state->epoch, 'revision' => (string) $state->revision,
-                'recovery_secret' => Crypt::decryptString($saved->encrypted_secret)];
-        }, 5);
+        throw new SyncProtocolException('server_recovery_disabled', 409);
     }
 
     public function escrow(int $userId, array $context, array $keys, string $recoverySecret): array
     {
-        return DB::transaction(function () use ($userId, $context, $keys, $recoverySecret) {
-            $this->journal->lockUser($userId);
-            $state = $this->authorizeWrite($userId, $context);
-            $existing = DB::table('sync_native_keys')->where('user_id', $userId)->pluck('key_id')->all();
-            $received = array_column($keys, 'key_id');
-            sort($existing);
-            sort($received);
-            if (! $state || $existing !== $received) {
-                throw new SyncProtocolException('crypto_state_conflict', 409);
-            }
-            foreach ($keys as $key) {
-                $this->envelope->validateBundle($key['key_id'], $key['encrypted_bundle']);
-                DB::table('sync_native_keys')->where('user_id', $userId)->where('key_id', $key['key_id'])
-                    ->update(['encrypted_bundle' => $key['encrypted_bundle'], 'updated_at' => now()]);
-            }
-            $this->storeRecoverySecret($userId, $state->epoch, $recoverySecret);
-            DB::table('sync_crypto_states')->where('user_id', $userId)->update(['revision' => $state->revision + 1]);
-
-            return $this->format($this->state($userId));
-        }, 5);
+        throw new SyncProtocolException('server_recovery_disabled', 409);
     }
 
     public function rotate(int $userId, array $context, string $keyId, string $bundle): array
     {
         $this->envelope->validateBundle($keyId, $bundle);
 
-        return DB::transaction(function () use ($userId, $context, $keyId, $bundle) {
+        return DB::transaction(function () use ($userId, $context) {
             $this->journal->lockUser($userId);
             $state = $this->authorizeWrite($userId, $context);
             if (! $state) {
                 throw new SyncProtocolException('native_keys_required', 409);
             }
-            $this->insertKey($userId, $keyId, $bundle);
-            DB::table('sync_server_recovery')->where('user_id', $userId)->delete();
-            DB::table('sync_crypto_states')->where('user_id', $userId)->update([
-                'active_key_id' => $keyId, 'revision' => $state->revision + 1,
-            ]);
-
-            return $this->format($this->state($userId));
+            throw new SyncProtocolException('durable_rotation_required', 409);
         }, 5);
     }
 
@@ -130,19 +97,246 @@ class SyncNativeCryptoService
     {
         $this->envelope->validateBundle($keyId, $bundle);
 
-        return DB::transaction(function () use ($userId, $context, $keyId, $bundle) {
+        return DB::transaction(function () use ($userId, $context, $keyId) {
             $this->journal->lockUser($userId);
             $state = $this->authorizeWrite($userId, $context);
             $key = DB::table('sync_native_keys')->where('user_id', $userId)->where('key_id', $keyId);
             if (! $state || ! $key->exists()) {
                 throw new SyncProtocolException('unknown_key', 404);
             }
-            $key->update(['encrypted_bundle' => $bundle, 'updated_at' => now()]);
-            DB::table('sync_server_recovery')->where('user_id', $userId)->delete();
-            DB::table('sync_crypto_states')->where('user_id', $userId)->update(['revision' => $state->revision + 1]);
+            throw new SyncProtocolException('durable_rotation_required', 409);
+        }, 5);
+    }
+
+    public function startRotation(int $userId, array $context, string $operationId, string $keyId, string $bundle, array $keys, array $identityKey, string $registryAuth): array
+    {
+        $this->envelope->validateBundle($keyId, $bundle);
+        $this->validateRegistryAuth($registryAuth);
+        usort($keys, fn ($left, $right) => strcmp($left['key_id'], $right['key_id']));
+        $operationId = strtolower($operationId);
+        $fingerprint = hash('sha256', json_encode([$keyId, $bundle, $keys, $identityKey, $registryAuth], JSON_THROW_ON_ERROR));
+
+        return DB::transaction(function () use ($userId, $context, $operationId, $keyId, $bundle, $keys, $identityKey, $fingerprint, $registryAuth) {
+            $this->journal->lockUser($userId);
+            $this->requireSession($userId, $context['session_id']);
+            $state = $this->state($userId);
+            $previous = DB::table('sync_key_rotations')->where('user_id', $userId)->first();
+            if ($previous?->operation_id === $operationId && $context['epoch'] === $state->epoch) {
+                if (! hash_equals($previous->fingerprint, $fingerprint)) {
+                    throw new SyncProtocolException('idempotency_conflict', 409);
+                }
+
+                return $this->format($state);
+            }
+            $this->authorizeWrite($userId, $context);
+            if (! $state->active_key_id) {
+                throw new SyncProtocolException('native_keys_required', 409);
+            }
+            if ($previous?->phase === 'rewriting') {
+                throw new SyncProtocolException('rotation_in_progress', 409);
+            }
+            $existing = DB::table('sync_native_keys')->where('user_id', $userId)->pluck('key_id')->all();
+            if (in_array($keyId, $existing, true)) {
+                throw new SyncProtocolException('key_id_exists', 409);
+            }
+            if (count($existing) >= self::MAX_KEYS) {
+                throw new SyncProtocolException('key_capacity_reached', 409);
+            }
+            $expected = [...$existing, $keyId];
+            sort($expected, SORT_STRING);
+            if ($expected !== array_column($keys, 'key_id')) {
+                throw new SyncProtocolException('incomplete_key_registry', 422);
+            }
+            $this->validateIdentityKey($identityKey, $expected, $state->identity_key_id);
+            foreach ($keys as $key) {
+                $this->envelope->validateBundle($key['key_id'], $key['encrypted_bundle']);
+                if ($key['key_id'] === $keyId && $key['encrypted_bundle'] !== $bundle) {
+                    throw new SyncProtocolException('invalid_native_bundle', 422);
+                }
+                DB::table('sync_native_keys')->updateOrInsert(['user_id' => $userId, 'key_id' => $key['key_id']], [
+                    'encrypted_bundle' => $key['encrypted_bundle'], 'created_at' => now(), 'updated_at' => now(),
+                ]);
+            }
+            DB::table('sync_crypto_states')->where('user_id', $userId)->update([
+                'active_key_id' => $keyId, 'revision' => $state->revision + 1, 'custody' => 'transition',
+                'identity_key_id' => $identityKey['key_id'], 'identity_bundle' => $identityKey['encrypted_bundle'],
+                'registry_auth' => $registryAuth,
+            ]);
+            DB::table('sync_key_rotations')->updateOrInsert(['user_id' => $userId], [
+                'operation_id' => $operationId, 'fingerprint' => $fingerprint, 'target_key_id' => $keyId,
+                'source_key_ids' => json_encode($existing, JSON_THROW_ON_ERROR), 'phase' => 'rewriting',
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
 
             return $this->format($this->state($userId));
         }, 5);
+    }
+
+    public function completeRotation(int $userId, array $context, string $operationId, string $registryAuth): array
+    {
+        $this->validateRegistryAuth($registryAuth);
+
+        return DB::transaction(function () use ($userId, $context, $operationId, $registryAuth) {
+            $this->journal->lockUser($userId);
+            $this->requireSession($userId, $context['session_id']);
+            $state = $this->state($userId);
+            $rotation = $this->rotationProgress($userId);
+            if ($rotation === null || $rotation['operation_id'] !== strtolower($operationId)) {
+                throw new SyncProtocolException('unknown_rotation', 404);
+            }
+            if ($rotation['phase'] === 'complete' && $context['epoch'] === $state->epoch) {
+                return $this->format($state);
+            }
+            $this->authorizeWrite($userId, $context);
+            if ($rotation['live_records'] !== 0) {
+                throw new SyncProtocolException('rotation_records_pending', 409);
+            }
+            DB::table('sync_server_recovery')->where('user_id', $userId)->delete();
+            DB::table('sync_crypto_states')->where('user_id', $userId)->update([
+                'custody' => 'client', 'revision' => $state->revision + 1, 'registry_auth' => $registryAuth,
+            ]);
+            DB::table('sync_key_rotations')->where('user_id', $userId)->update(['phase' => 'complete', 'updated_at' => now()]);
+
+            return $this->format($this->state($userId));
+        }, 5);
+    }
+
+    public function retireKey(int $userId, array $context, string $keyId, string $registryAuth): array
+    {
+        $this->validateRegistryAuth($registryAuth);
+
+        return DB::transaction(function () use ($userId, $context, $keyId, $registryAuth) {
+            $this->journal->lockUser($userId);
+            $state = $this->authorizeWrite($userId, $context);
+            if (! $state || $state->custody !== 'client' || $state->active_key_id === $keyId || $state->identity_key_id === $keyId) {
+                throw new SyncProtocolException('key_retirement_forbidden', 409);
+            }
+            $key = DB::table('sync_native_keys')->where('user_id', $userId)->where('key_id', $keyId);
+            if (! $key->exists()) {
+                throw new SyncProtocolException('unknown_key', 404);
+            }
+            foreach (Record::where('user_id', $userId)->select('payload')->cursor() as $record) {
+                if ($this->referencesKey($record->payload, $keyId)) {
+                    throw new SyncProtocolException('key_in_use', 409);
+                }
+            }
+            foreach ($this->journalRecords($userId)->cursor() as $change) {
+                $record = json_decode($change->record, true);
+                if (! is_array($record) || $this->referencesKey($record['payload'] ?? '', $keyId)) {
+                    throw new SyncProtocolException('key_in_use', 409);
+                }
+            }
+            $key->delete();
+            DB::table('sync_crypto_states')->where('user_id', $userId)->update(['revision' => $state->revision + 1, 'registry_auth' => $registryAuth]);
+
+            return $this->format($this->state($userId));
+        }, 5);
+    }
+
+    public function rotationRecords(int $userId, string $sessionId, ?string $cursor, int $limit): array
+    {
+        return DB::transaction(function () use ($userId, $sessionId, $cursor, $limit) {
+            $this->journal->lockUser($userId);
+            $this->requireSession($userId, $sessionId);
+            $rotation = DB::table('sync_key_rotations')->where('user_id', $userId)->first();
+            if (! $rotation) {
+                throw new SyncProtocolException('unknown_rotation', 404);
+            }
+            $after = null;
+            if ($cursor !== null) {
+                try {
+                    $decoded = json_decode(Crypt::decryptString($cursor), true, 16, JSON_THROW_ON_ERROR);
+                } catch (DecryptException|\JsonException) {
+                    throw new SyncProtocolException('invalid_cursor');
+                }
+                if (! is_array($decoded) || ($decoded['user'] ?? null) !== (string) $userId ||
+                    ($decoded['rotation'] ?? null) !== $rotation->operation_id || ! Str::isUuid($decoded['after'] ?? '')) {
+                    throw new SyncProtocolException('invalid_cursor');
+                }
+                $after = $decoded['after'];
+            }
+            $query = Record::where('user_id', $userId)->orderBy('id');
+            if ($after !== null) {
+                $query->where('id', '>', $after);
+            }
+            $records = [];
+            $bytes = 0;
+            $hasMore = false;
+            $collectionNames = DB::table('collections')->pluck('name', 'id');
+            $streams = [];
+            foreach ($query->cursor() as $record) {
+                $collectionName = $collectionNames[$record->collection_id];
+                if (! $this->needsRewrite($record->payload, $rotation->target_key_id) &&
+                    ! ($collectionName === 'history' && ! $record->deleted && str_starts_with($record->record_id, 'h1:'))) {
+                    continue;
+                }
+                $stream = $streams[$record->collection_id] ??= $this->journal->prepare($userId, $record->collection_id);
+                $value = ['collection' => $collectionName, 'generation' => $stream->generation,
+                    'record' => ['id' => $record->record_id, 'revision' => (string) $record->version,
+                        'payload' => $record->payload, 'deleted' => $record->deleted, 'ttl' => $record->ttl?->toIso8601String()]];
+                $size = strlen(json_encode($value, JSON_THROW_ON_ERROR));
+                if (count($records) >= $limit || ($records !== [] && $bytes + $size > SyncChangeJournal::MAX_PAGE_BYTES)) {
+                    $hasMore = true;
+                    break;
+                }
+                $records[] = $value;
+                $bytes += $size;
+                $after = $record->id;
+            }
+
+            return ['rotation_id' => $rotation->operation_id, 'records' => $records, 'has_more' => $hasMore,
+                'next_cursor' => ! $hasMore ? null : Crypt::encryptString(json_encode([
+                    'user' => (string) $userId, 'rotation' => $rotation->operation_id, 'after' => $after,
+                ], JSON_THROW_ON_ERROR))];
+        }, 5);
+    }
+
+    private function rotationProgress(int $userId): ?array
+    {
+        $rotation = DB::table('sync_key_rotations')->where('user_id', $userId)->first();
+        if (! $rotation) {
+            return null;
+        }
+        $live = 0;
+        $historyId = DB::table('collections')->where('name', 'history')->value('id');
+        foreach (Record::where('user_id', $userId)->select('payload', 'collection_id', 'record_id', 'deleted')->cursor() as $record) {
+            $live += (int) ($this->needsRewrite($record->payload, $rotation->target_key_id) ||
+                ($record->collection_id === $historyId && ! $record->deleted && str_starts_with($record->record_id, 'h1:')));
+        }
+        $journal = 0;
+        foreach ($this->journalRecords($userId)->cursor() as $change) {
+            $record = json_decode($change->record, true);
+            if (($record['payload'] ?? '') !== '') {
+                $journal += (int) $this->needsRewrite($record['payload'], $rotation->target_key_id);
+            }
+        }
+
+        return ['operation_id' => $rotation->operation_id, 'target_key_id' => $rotation->target_key_id,
+            'source_key_ids' => json_decode($rotation->source_key_ids, true, flags: JSON_THROW_ON_ERROR),
+            'phase' => $rotation->phase, 'live_records' => $live, 'journal_records' => $journal];
+    }
+
+    private function journalRecords(int $userId): \Illuminate\Database\Query\Builder
+    {
+        return DB::table('sync_changes')->join('sync_streams', 'sync_streams.id', '=', 'sync_changes.stream_id')
+            ->where('sync_streams.user_id', $userId)->select('sync_changes.record');
+    }
+
+    private function needsRewrite(string $payload, string $targetKeyId): bool
+    {
+        $value = json_decode($payload, true);
+
+        return ! is_array($value) || ($value['key_id'] ?? null) !== $targetKeyId || ($value['context']['schema_version'] ?? null) !== 2;
+    }
+
+    private function referencesKey(string $payload, string $keyId): bool
+    {
+        if ($payload === '') {
+            return false;
+        }
+        $referencedId = $this->envelope->recordKeyId($payload);
+
+        return $referencedId === null || $referencedId === $keyId;
     }
 
     public function requireLegacyWriter(int $userId): void
@@ -177,6 +371,9 @@ class SyncNativeCryptoService
         $this->requireTransaction();
         $this->requireSession($userId, $context['session_id']);
         $this->requireRevision($this->state($userId), $context);
+        if ($this->state($userId)->custody !== 'server') {
+            throw new SyncProtocolException('authenticated_control_required', 409);
+        }
     }
 
     public function authorizeWrite(int $userId, ?array $context, ?int $deviceId = null): ?object
@@ -211,10 +408,13 @@ class SyncNativeCryptoService
     {
         $this->requireTransaction();
         DB::table('sync_server_recovery')->where('user_id', $userId)->delete();
+        DB::table('sync_key_rotations')->where('user_id', $userId)->delete();
+        DB::table('sync_history_id_migrations')->where('user_id', $userId)->delete();
         DB::table('sync_native_keys')->where('user_id', $userId)->delete();
         DB::table('sync_crypto_states')->where('user_id', $userId)->update([
             'epoch' => (string) Str::uuid(), 'revision' => 0, 'active_key_id' => null,
             'legacy_frozen' => false, 'legacy_fingerprint' => null,
+            'identity_key_id' => null, 'identity_bundle' => null, 'registry_auth' => null,
         ]);
     }
 
@@ -230,19 +430,7 @@ class SyncNativeCryptoService
 
     private function requireSession(int $userId, string $sessionId): SyncSession
     {
-        $session = SyncSession::whereKey($sessionId)->where('user_id', $userId)->valid()->lockForUpdate()->first();
-        if (! $session) {
-            throw new SyncProtocolException('auth_required', 401);
-        }
-        if ($session->protocol_version !== 2) {
-            throw new SyncProtocolException('client_upgrade_required', 426);
-        }
-        if (! $session->device_id || ! Device::whereKey($session->device_id)->where('user_id', $userId)->exists()) {
-            throw new SyncProtocolException('device_required', 409);
-        }
-        $this->identity->forUser(User::findOrFail($userId));
-
-        return $session;
+        return $this->journal->requireSession($userId, $sessionId);
     }
 
     private function requireRevision(object $state, array $context): void
@@ -270,12 +458,20 @@ class SyncNativeCryptoService
         ]);
     }
 
-    private function storeRecoverySecret(int $userId, string $epoch, string $secret): void
+    private function validateIdentityKey(?array $key, array $dataKeyIds, ?string $existingId = null): void
     {
-        DB::table('sync_server_recovery')->updateOrInsert(['user_id' => $userId], [
-            'epoch' => $epoch, 'encrypted_secret' => Crypt::encryptString($secret),
-            'created_at' => now(), 'updated_at' => now(),
-        ]);
+        if ($key === null || ! isset($key['key_id'], $key['encrypted_bundle']) ||
+            in_array($key['key_id'], $dataKeyIds, true) || ($existingId !== null && $key['key_id'] !== $existingId)) {
+            throw new SyncProtocolException('invalid_identity_key', 422);
+        }
+        $this->envelope->validateBundle($key['key_id'], $key['encrypted_bundle']);
+    }
+
+    private function validateRegistryAuth(string $value): void
+    {
+        if (! preg_match('/^[0-9a-f]{64}$/D', $value)) {
+            throw new SyncProtocolException('invalid_registry_auth', 422);
+        }
     }
 
     private function incompatibleSessions(int $userId): Builder
@@ -288,6 +484,12 @@ class SyncNativeCryptoService
         return [
             'crypto_state_version' => 1, 'epoch' => $state->epoch, 'revision' => (string) $state->revision,
             'mode' => $state->native_enabled ? 'native' : 'legacy', 'active_key_id' => $state->active_key_id,
+            'custody' => $state->custody,
+            'registry_auth' => $state->registry_auth,
+            'identity_key' => $state->identity_key_id === null ? null : [
+                'key_id' => $state->identity_key_id, 'encrypted_bundle' => $state->identity_bundle,
+            ],
+            'rotation' => $this->rotationProgress($state->user_id),
             'legacy_frozen' => (bool) $state->legacy_frozen,
             'incompatible_sessions' => $this->incompatibleSessions($state->user_id)->count(),
             'migration_required' => $this->migrationRequired($state),

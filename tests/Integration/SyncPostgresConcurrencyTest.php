@@ -48,10 +48,13 @@ class SyncPostgresConcurrencyTest extends TestCase
         $user = User::factory()->create(['storage_quota_bytes' => $scenario === 'quota' ? 5 : 104857600]);
         $a = Device::create(['user_id' => $user->id, 'device_id' => 'a', 'name' => 'A', 'type' => 'desktop']);
         $b = Device::create(['user_id' => $user->id, 'device_id' => 'b', 'name' => 'B', 'type' => 'desktop']);
+        $auth = app(SyncAuthService::class);
+        $sessionA = $auth->validateToken($this->createNativeSessionToken($user, $a)['token'])->id;
+        $sessionB = $auth->validateToken($this->createNativeSessionToken($user, $b)['token'])->id;
         $storage = app(SyncStorageService::class);
         $secondCollection = $scenario === 'quota' ? 'history' : 'bookmarks';
-        $generation = $storage->getChanges($user->id, 'bookmarks', $a->id, null, 100)['generation'];
-        $secondGeneration = $storage->getChanges($user->id, $secondCollection, $b->id, null, 100)['generation'];
+        $generation = $storage->getChanges($user->id, 'bookmarks', $a->id, null, 100, $sessionA)['generation'];
+        $secondGeneration = $storage->getChanges($user->id, $secondCollection, $b->id, null, 100, $sessionB)['generation'];
         $first = ['operation_id' => (string) Str::uuid(), 'id' => 'a', 'base_revision' => '0', 'payload' => '12345'];
         $second = [
             'operation_id' => (string) Str::uuid(),
@@ -107,12 +110,12 @@ class SyncPostgresConcurrencyTest extends TestCase
             $this->assertSame(0, pcntl_wexitstatus($status), json_encode($result));
             $this->assertSame($expected, $result['results'][0]['status']);
 
-            $changes = $storage->getChanges($user->id, 'bookmarks', $a->id, null, 100)['changes'];
+            $changes = $storage->getChanges($user->id, 'bookmarks', $a->id, null, 100, $sessionA)['changes'];
             $this->assertSame($scenario === 'order' ? ['1', '2'] : ['1'], array_column($changes, 'sequence'));
             $this->assertSame($scenario === 'rollback' ? 'new' : '12345', $changes[0]['record']['payload']);
             $this->assertSame('1', $changes[0]['record']['revision']);
             if ($scenario === 'quota') {
-                $this->assertSame([], $storage->getChanges($user->id, 'history', $b->id, null, 100)['changes']);
+                $this->assertSame([], $storage->getChanges($user->id, 'history', $b->id, null, 100, $sessionB)['changes']);
                 $this->assertSame(5, $storage->getSyncInfo($user->id)['used_bytes']);
             }
         } finally {
@@ -137,6 +140,97 @@ class SyncPostgresConcurrencyTest extends TestCase
         ];
     }
 
+    public static function readRevocationScenarios(): array
+    {
+        return [
+            'read after revocation' => ['read', false],
+            'ack after revocation' => ['ack', false],
+            'read after rollback' => ['read', true],
+            'ack after rollback' => ['ack', true],
+        ];
+    }
+
+    #[DataProvider('readRevocationScenarios')]
+    public function test_admitted_reads_and_acknowledgements_recheck_session_after_waiting_for_revocation(string $action, bool $rollback): void
+    {
+        $user = User::factory()->create();
+        $device = Device::create(['user_id' => $user->id, 'device_id' => (string) Str::uuid(), 'name' => 'Reader', 'type' => 'desktop']);
+        $token = $this->createNativeSessionToken($user, $device)['token'];
+        $auth = app(SyncAuthService::class);
+        $sessionId = $auth->validateToken($token)->id;
+        $storage = app(SyncStorageService::class);
+        $cursor = $storage->getChanges($user->id, 'bookmarks', $device->id, null, 100, $sessionId)['next_cursor'];
+        $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        $this->assertNotFalse($sockets);
+        DB::disconnect();
+        $child = pcntl_fork();
+        $this->assertNotSame(-1, $child);
+        if ($child === 0) {
+            fclose($sockets[0]);
+            try {
+                stream_set_timeout($sockets[1], 10);
+                DB::statement("SET statement_timeout = '8s'");
+                if ($auth->validateToken($token)?->id !== $sessionId) {
+                    throw new \RuntimeException('The request must be admitted before revocation.');
+                }
+                fwrite($sockets[1], json_encode(['pid' => DB::selectOne('SELECT pg_backend_pid() AS pid')->pid])."\n");
+                if (trim((string) fgets($sockets[1])) !== 'go') {
+                    exit(2);
+                }
+                try {
+                    if ($action === 'read') {
+                        $storage->getChanges($user->id, 'bookmarks', $device->id, null, 100, $sessionId);
+                    } else {
+                        $storage->acknowledgeChanges($user->id, 'bookmarks', $device->id, $cursor, $sessionId);
+                    }
+                    $result = ['status' => 'accepted'];
+                } catch (SyncProtocolException $error) {
+                    $result = ['error' => $error->error];
+                }
+                fwrite($sockets[1], json_encode($result, JSON_THROW_ON_ERROR)."\n");
+                DB::disconnect();
+                fclose($sockets[1]);
+                exit(0);
+            } catch (\Throwable $error) {
+                fwrite($sockets[1], json_encode(['error' => $error->getMessage()])."\n");
+                exit(1);
+            }
+        }
+        fclose($sockets[1]);
+        stream_set_timeout($sockets[0], 10);
+        try {
+            $ready = json_decode((string) fgets($sockets[0]), true, flags: JSON_THROW_ON_ERROR);
+            $this->assertArrayHasKey('pid', $ready);
+            DB::beginTransaction();
+            $this->assertTrue($auth->revokeSession($user->id, $sessionId));
+            fwrite($sockets[0], "go\n");
+            $this->assertTrue($this->waitForDatabaseLock($ready['pid']), 'The admitted request must wait on the revoking account transaction.');
+            if ($rollback) {
+                DB::rollBack();
+            } else {
+                DB::commit();
+            }
+            $result = json_decode((string) fgets($sockets[0]), true, flags: JSON_THROW_ON_ERROR);
+            pcntl_waitpid($child, $status);
+            $child = null;
+            $this->assertTrue(pcntl_wifexited($status));
+            $this->assertSame(0, pcntl_wexitstatus($status), json_encode($result));
+            $this->assertSame($rollback ? ['status' => 'accepted'] : ['error' => 'auth_required'], $result);
+            $this->assertDatabaseCount('sync_sessions', $rollback ? 1 : 0);
+            $this->assertDatabaseCount('sync_device_cursors', $rollback && $action === 'ack' ? 1 : 0);
+            $this->assertDatabaseCount('devices', 1);
+        } finally {
+            while (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
+            fclose($sockets[0]);
+            if ($child !== null) {
+                posix_kill($child, SIGTERM);
+                pcntl_waitpid($child, $status);
+            }
+        }
+    }
+
     #[DataProvider('nativeCutoverScenarios')]
     public function test_native_cutover_serializes_with_writes_and_session_issuance(string $scenario, string $expected): void
     {
@@ -151,6 +245,10 @@ class SyncPostgresConcurrencyTest extends TestCase
         $fixture = json_decode(file_get_contents(__DIR__.'/../Fixtures/native-sodium.json'), true, flags: JSON_THROW_ON_ERROR);
         $bundle = json_encode($fixture['bundle'], JSON_THROW_ON_ERROR);
         $keyId = $fixture['key_id'];
+        $identityId = rtrim(strtr(base64_encode(str_repeat('i', 16)), '+/', '-_'), '=');
+        $identityBundle = $fixture['bundle'];
+        $identityBundle['key_id'] = $identityId;
+        $identityKey = ['key_id' => $identityId, 'encrypted_bundle' => json_encode($identityBundle, JSON_THROW_ON_ERROR)];
         $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
         $this->assertNotFalse($sockets);
         DB::disconnect();
@@ -169,7 +267,7 @@ class SyncPostgresConcurrencyTest extends TestCase
                     match ($scenario) {
                         'legacy_write' => app(SyncStorageService::class)->upsertRecord($user->id, 'bookmarks', 'legacy', 'old payload'),
                         'legacy_session' => app(SyncAuthService::class)->createSessionToken($user, protocolVersion: 1),
-                        default => $crypto->activate($user->id, $context, $keyId, $bundle, false),
+                        default => $crypto->activate($user->id, $context, $keyId, $bundle, false, $identityKey, str_repeat('a', 64)),
                     };
                     $result = ['error' => 'unexpected_success'];
                 } catch (SyncProtocolException $error) {
@@ -191,7 +289,7 @@ class SyncPostgresConcurrencyTest extends TestCase
             if ($scenario === 'legacy_first') {
                 app(SyncStorageService::class)->upsertRecord($user->id, 'bookmarks', 'legacy', 'old payload');
             } else {
-                $crypto->activate($user->id, $context, $keyId, $bundle, false);
+                $crypto->activate($user->id, $context, $keyId, $bundle, false, $identityKey, str_repeat('a', 64));
             }
             fwrite($sockets[0], "go\n");
             $ready = json_decode((string) fgets($sockets[0]), true, flags: JSON_THROW_ON_ERROR);

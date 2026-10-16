@@ -18,14 +18,21 @@ class SyncQuota
     public function usage(int $userId, ?Carbon $at = null): int
     {
         $at ??= now();
+        if (DB::table('sync_crypto_states')->where('user_id', $userId)->where('custody', '<>', 'server')->exists()) {
+            return (int) Record::forUser($userId)->sum(DB::raw(self::payloadBytesSql()));
+        }
 
         return (int) Record::forUser($userId)->where('deleted', false)
             ->where(fn ($query) => $query->whereNull('ttl')->orWhere('ttl', '>', $at))
             ->sum(DB::raw(self::payloadBytesSql()));
     }
 
-    public function recordBytes(string $payload, bool $deleted, ?string $ttl, ?Carbon $at = null): int
+    public function recordBytes(string $payload, bool $deleted, ?string $ttl, ?Carbon $at = null, bool $protected = false): int
     {
+        if ($protected) {
+            return strlen($payload);
+        }
+
         return $deleted || ($ttl !== null && Carbon::parse($ttl)->lessThanOrEqualTo($at ?? now())) ? 0 : strlen($payload);
     }
 

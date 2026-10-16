@@ -40,17 +40,14 @@ class HistoryClearTest extends TestCase
         $this->withToken($this->token);
         $state = $this->getJson('/api/v1/crypto/state')->assertOk()->json();
         $this->keyId = rtrim(strtr(base64_encode(str_repeat('k', 16)), '+/', '-_'), '=');
-        $activated = $this->postJson('/api/v1/crypto/activate', [
-            'crypto' => ['epoch' => $state['epoch'], 'revision' => $state['revision']],
-            'key_id' => $this->keyId,
-            'encrypted_bundle' => json_encode([
-                'bundle_version' => 2, 'crypto_version' => 2, 'key_id' => $this->keyId,
-                'kdf' => ['algorithm' => 'argon2id13', 'memory_kib' => 65536, 'iterations' => 3, 'parallelism' => 1],
-                'salt' => base64_encode(str_repeat('s', 16)),
-                'nonce' => base64_encode(str_repeat('n', 24)),
-                'ciphertext' => base64_encode(str_repeat('c', 48)),
-            ], JSON_THROW_ON_ERROR),
-        ])->assertOk()->json();
+        DB::table('sync_crypto_states')->where('user_id', $this->user->id)->update([
+            'native_enabled' => true, 'active_key_id' => $this->keyId, 'revision' => 1, 'custody' => 'server',
+        ]);
+        DB::table('sync_native_keys')->insert([
+            'user_id' => $this->user->id, 'key_id' => $this->keyId,
+            'encrypted_bundle' => 'historical recovery bundle', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $activated = $this->getJson('/api/v1/crypto/state')->assertOk()->json();
         $this->crypto = ['epoch' => $activated['epoch'], 'revision' => $activated['revision']];
     }
 

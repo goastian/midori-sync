@@ -43,6 +43,9 @@ class SyncChangesController extends Controller
             'changes_version' => 1,
             'operations_version' => 1,
             'crypto_state_version' => 1,
+            'crypto_custody_version' => 1,
+            'record_schema_versions' => [1, 2],
+            'client_recovery' => ['version' => 1, 'rotation_version' => 1, 'authenticated_controls' => false],
             'crypto_versions' => [2],
             'features' => ['opaque_cursors', 'snapshot_fence', 'tombstones', 'device_acknowledgements', 'conditional_operations', 'idempotent_operations', 'credit_cards'],
             'limits' => [
@@ -68,6 +71,7 @@ class SyncChangesController extends Controller
             $this->deviceId($request),
             $data['cursor'] ?? null,
             (int) ($data['limit'] ?? SyncChangeJournal::MAX_PAGE_SIZE),
+            $request->input('sync_session')->id,
         ))->header('Cache-Control', 'no-store');
     }
 
@@ -80,6 +84,7 @@ class SyncChangesController extends Controller
             $name,
             $this->deviceId($request),
             $data['cursor'],
+            $request->input('sync_session')->id,
         ))->header('Cache-Control', 'no-store');
     }
 
