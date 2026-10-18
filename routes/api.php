@@ -41,6 +41,7 @@ Route::prefix('v1')->middleware(SyncApiCors::class)->group(function () {
         Route::post('/sync/notifications/ticket', [SyncNotificationController::class, 'ticket'])->middleware('throttle:sync');
         Route::post('/sync/collections/{name}/ack', [SyncChangesController::class, 'acknowledge']);
         Route::post('/sync/collections/{name}/operations', [SyncChangesController::class, 'operations']);
+        Route::post('/sync/collections/{name}/compact', [SyncChangesController::class, 'compact']);
         Route::post('/sync/collections/history/clear', [SyncChangesController::class, 'clearHistory']);
 
         // Devices
@@ -58,6 +59,7 @@ Route::prefix('v1')->middleware(SyncApiCors::class)->group(function () {
         Route::get('/crypto/rotation/records', [NativeCryptoController::class, 'rotationRecords']);
         Route::post('/crypto/rotation/complete', [NativeCryptoController::class, 'completeRotation']);
         Route::post('/crypto/rotation/history-id', [NativeCryptoController::class, 'migrateHistoryId']);
+        Route::post('/crypto/rotation/history-target', [NativeCryptoController::class, 'historyTarget']);
         Route::put('/crypto/native-keys/{keyId}', [NativeCryptoController::class, 'rewrap']);
         Route::delete('/crypto/native-keys/{keyId}', [NativeCryptoController::class, 'retire']);
         Route::delete('/sync/data', [NativeCryptoController::class, 'wipe']);
