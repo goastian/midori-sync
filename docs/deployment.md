@@ -6,6 +6,22 @@
 - An [Authentik](https://goauthentik.io/) instance for OAuth2/OIDC authentication
 - A domain name with HTTPS (for production)
 
+The default HTTP container port binds only to `127.0.0.1`. Use it for local
+integration or behind a TLS reverse proxy. HTTPS is required outside loopback;
+changing `APP_BIND_IP` to a public interface does not enable TLS. Set
+`APP_ENV=production`, `APP_DEBUG=false`, `SESSION_SECURE_COOKIE=true` and
+`SESSION_ENCRYPT=true` for production, and expose only the TLS proxy. `APP_URL`
+alone does not enforce HTTPS. The local Artisan instance on port 8000 is an
+explicit development exception; it must stay bound to loopback.
+
+The shipped nginx access-log format records method, path, status and sizes only;
+it omits query strings, referrers and authorization/cookie headers. Preserve this
+rule at every upstream proxy: OAuth callbacks carry short-lived authorization
+codes in their URL. Do not enable request-body/header tracing or debug exception
+pages around authentication. Client recovery codes and key material must never
+enter URLs, access logs, analytics or crash telemetry. PHP's development server
+is not a production logging or TLS boundary.
+
 ## Quick Start (Docker Compose)
 
 ### 1. Clone the repository

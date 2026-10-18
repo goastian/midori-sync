@@ -11,7 +11,10 @@
 ### 1.1 Assets
 
 - **User data**: bookmarks, history, tabs, browser-settings,
-  midori-tab, midori-privacy, and `passwords`. All E2E encrypted.
+  midori-tab, midori-privacy, devices, passwords, credit cards, form history
+  and addresses. Native client-custody payloads are encrypted end to end.
+  Historical server-custody accounts remain recoverable by the server until
+  migration; deleting escrow cannot erase older backups or prior knowledge.
 - **Native recovery secret**: protects the V2 key bundle held by the client.
 - **Legacy seed and master key**: needed only while migrating V1 ciphertext.
 - **Sync tokens**: bearer tokens issued by the backend; allow access to
@@ -23,13 +26,13 @@
 
 | Adversary                      | Assumed Capability                              | Primary Mitigation                         |
 |--------------------------------|-------------------------------------------------|--------------------------------------------|
-| Backend operator               | Reads full DB, logs, and filesystem             | E2E: only sees ciphertext + metadata       |
+| Backend operator | Reads DB, backups and application keys; may alter responses | Client custody with independent recovery code, authenticated registry/records/controls; legacy escrow remains a historical exception |
 | Network attacker               | Active MITM if TLS is absent                    | HTTPS + HSTS in production                 |
 | Attacker with device access    | Reads local profile and old extension storage   | OS-backed native secret store and profile protection |
 | Web attacker (CSRF / XSS)      | Injects JS into dashboard or internal pages     | CSP + Vue escaping + privileged client boundary |
-| Malicious extension attacker   | Another extension with similar permissions      | Native privileged modules and scoped tokens |
+| Malicious extension attacker   | Another extension with similar permissions      | Native privileged modules and account/device-bound tokens |
 | Token theft adversary          | Bearer replay until TTL expires                 | DB hashing + TTL + revocation + auditing   |
-| High-compute adversary         | Offline seed brute force                        | Argon2id (ops=3, mem=64MB) + 24 words      |
+| High-compute adversary         | Offline seed brute force                        | Argon2id13 (ops=3, mem=64MB); high-entropy native recovery code      |
 
 ### 1.3 Out of Scope
 
@@ -42,24 +45,36 @@
 
 ## 2. E2E Encryption
 
-Full algorithmic details: [encryption.md](encryption.md).
-Invariant summary:
+Current native contract: [native-sync-api.md](native-sync-api.md). The older
+[encryption.md](encryption.md) describes the retired extension format.
 
-- **Legacy KDF**: Argon2id (`ops=3`, `mem=64 MB`) over the old seed and bundle salt. The retired extension performed it in a worker.
-- **Native V2 KDF**: Argon2id13 with a versioned recovery bundle, implemented in Rust; see [native-sync-api.md](native-sync-api.md).
-- **Per-collection subkeys**: BLAKE2b with context `MSPv1key` and
-  `subkey_id = COLLECTION_INDEX[name]`. Indices are stable; changing
-  them breaks decryption of existing data.
-- **AEAD**: XChaCha20-Poly1305. Backend upload payload layout:
-  `base64(nonce(24) || ciphertext || tag(16))`.
-- **Local lock**: `M` bundle encrypted with passphrase via Argon2id +
-  KDF context `MSPv1lck` (distinct from `MSPv1key`).
-- **Legacy master key rotation**: the retired client used an incremental,
-  resumable cursor and fallback decryption to `M_old`. Its format is
-  documented for migration in [encryption.md](encryption.md). Native key
-  rotation is specified separately in [native-sync-api.md](native-sync-api.md).
+- Native bundle wrapping uses Argon2id13 and `MSPv2key`. Record/local/identity
+  subkeys use `MSPv2rec`, `MSPv2loc` and `MSPv2ids`, with fixed collection indices.
+- XChaCha20-Poly1305 authenticates ciphertext, scope and record context. Schema 2
+  additionally authenticates deleted/TTL semantics inside the encrypted body.
+- Identity and data keys are separate. Controls use the identity devices subkey;
+  the server checks authorization and CAS, stores the MAC opaquely, and cannot
+  manufacture a valid client proof. Clients verify before local destructive work.
+- New activation never accepts an opening secret. Server recovery endpoints reject
+  disclosure and creation. Legacy migration uses a new data key, resumable
+  rewriting, explicit legacy-deletion review, history-ID reconciliation and final
+  registry confirmation before removing escrow. Current encrypted tombstones and
+  compacted snapshots keep offline devices recoverable while old keys retire.
+- Backend compromise does not reveal new client-custody plaintext from the DB,
+  encrypted backups and application keys alone. It can still deny service, withhold
+  data and observe sizes/timing, account/device IDs and collection names.
+- Registry MAC version 2 authenticates the resulting crypto revision. Activation,
+  rotation, completion and retirement sign and commit the previous revision plus
+  one; version-2 accounts cannot downgrade. Version-1 accounts retain their old
+  MAC until an authorized modern mutation upgrades it. Locally anchored authenticated
+  revisions reject known replay/rollback even after old keys have been retired. A newly recovered device
+  has no independent global freshness oracle; a full malicious-server rollback
+  cannot be ruled out solely by AEAD or the latest supplied registry. Protection
+  does not revoke knowledge retained by a previously authorized device.
 
-The backend NEVER has access to the seed, `M`, subkeys, or plaintext.
+The [synthetic encrypted backup/restore check](backup-restore-verification.md)
+separates backup keys, application keys and client recovery keys. Historical
+server escrow and old backups retain their earlier recovery properties.
 
 ---
 
@@ -77,10 +92,19 @@ The backend NEVER has access to the seed, `M`, subkeys, or plaintext.
 
 - At-rest hashing: SHA-256. The DB never stores bearer tokens in
   plaintext.
-- TTL: configurable; default 30 days. Hourly cleanup via
-  `sync:cleanup-expired`.
+- TTL: configurable for paired sessions. Renewable native sessions have separate
+  short-lived access and rotating refresh credentials, bounded lifetime and
+  idempotent response recovery; expiry is checked on every request.
 - Individual and bulk-per-user revocation available from the dashboard; native devices can revoke their sessions.
 - Auditing: IP, truncated User-Agent, `last_used_at`, `last_seen_ip`.
+
+Native sessions grant account-wide ciphertext operations for their bound identity
+and owned device; there are no per-collection or read-only grants. Revocation is
+rechecked inside the account transaction for feed/key reads and writes. Possessing
+a bearer alone does not supply a client recovery secret or valid MAC. An authorized
+malicious device may still delete server data or deny service; encryption is not an
+availability guarantee. Browser authorization uses explicit account confirmation,
+request correlation, one-use authorization codes and PKCE.
 
 ### 3.3 Manual Pairing
 
@@ -92,7 +116,7 @@ The dashboard issues a short-lived, single-use code for the native client via `/
 
 ### 4.1 nginx (production, `nginx.prod.conf`)
 
-- `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`
 - `Content-Security-Policy`: `default-src 'self'; script-src 'self';
   style-src 'self' 'unsafe-inline'; connect-src 'self' <authentik>;
   img-src 'self' data:; frame-ancestors 'none'`
@@ -101,9 +125,12 @@ The dashboard issues a short-lived, single-use code for the native client via `/
 - `Referrer-Policy: strict-origin-when-cross-origin`
 - `Permissions-Policy`: disables microphone, camera, and geolocation.
 
-> Current status: HSTS and CSP are currently TODO/open in
-> `docker/nginx.conf` (Block 2 / Phase 7). See
-> [plan-status.md](plan-status.md).
+The generic HTTP nginx template and Artisan server are for loopback development
+or a private upstream behind TLS. Compose binds loopback by default. The production
+template requires TLS 1.2/1.3; an `APP_URL` setting alone is not enforcement. Access
+logs omit query strings/referrers/authorization headers to avoid OAuth code leakage.
+Production must disable debug pages and request/body tracing, including upstream
+proxies and telemetry; the local HTTP test is not a production TLS validation.
 
 ### 4.2 CORS (`SyncApiCors`)
 
