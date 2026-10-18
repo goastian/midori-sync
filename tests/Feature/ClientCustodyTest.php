@@ -4,11 +4,13 @@ namespace Tests\Feature;
 
 use App\Models\Record;
 use App\Models\User;
+use App\Services\SyncNativeEnvelope;
 use App\Services\SyncQuota;
 use App\Services\SyncStorageService;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -94,6 +96,99 @@ class ClientCustodyTest extends TestCase
         return ['crypto' => $this->context($state), 'generation' => $generation,
             'operations' => [['operation_id' => (string) Str::uuid(), 'id' => $id,
                 'base_revision' => $revision, 'deleted' => $deleted, 'ttl' => $ttl, 'payload' => $payload]]];
+    }
+
+    public function test_revision_authenticated_registry_advances_atomically_and_cannot_downgrade(): void
+    {
+        $this->getJson('/api/v1/capabilities')->assertOk()->assertJsonPath('client_recovery.registry_auth_version', 2);
+        $this->assertSame(1, $this->state()['registry_auth_version']);
+        $state = $this->postJson('/api/v1/crypto/activate', $this->activation() + ['registry_auth_version' => 2])
+            ->assertOk()->assertJsonPath('revision', '1')->assertJsonPath('registry_auth_version', 2)->json();
+        $rotation = $this->rotation($state);
+        $this->postJson('/api/v1/crypto/rotation', $rotation)->assertStatus(409)->assertJsonPath('error', 'registry_auth_downgrade');
+        $this->assertSame($state, $this->state());
+        $rotation['registry_auth_version'] = 2;
+        $state = $this->postJson('/api/v1/crypto/rotation', $rotation)
+            ->assertOk()->assertJsonPath('revision', '2')->assertJsonPath('registry_auth_version', 2)->json();
+        $this->postJson('/api/v1/crypto/rotation', $rotation)->assertOk()->assertExactJson($state);
+        $this->postJson('/api/v1/crypto/rotation', array_replace($rotation, ['registry_auth_version' => 1]))
+            ->assertStatus(409)->assertJsonPath('error', 'idempotency_conflict');
+        $complete = ['crypto' => $this->context($state), 'operation_id' => $rotation['operation_id'], 'registry_auth' => str_repeat('f', 64)];
+        $this->postJson('/api/v1/crypto/rotation/complete', $complete)->assertStatus(409)->assertJsonPath('error', 'registry_auth_downgrade');
+        $this->assertSame($state, $this->state());
+        $complete['registry_auth_version'] = 2;
+        $state = $this->postJson('/api/v1/crypto/rotation/complete', $complete)
+            ->assertOk()->assertJsonPath('revision', '3')->assertJsonPath('registry_auth_version', 2)->json();
+        $this->postJson('/api/v1/crypto/rotation/complete', $complete)->assertOk()->assertExactJson($state);
+        $retire = ['crypto' => $this->context($state), 'registry_auth' => str_repeat('a', 64)];
+        $url = '/api/v1/crypto/native-keys/'.$this->key(1)['key_id'];
+        $this->deleteJson($url, $retire)->assertStatus(409)->assertJsonPath('error', 'registry_auth_downgrade');
+        $this->assertSame($state, $this->state());
+        $this->deleteJson($url, $retire + ['registry_auth_version' => 2])
+            ->assertOk()->assertJsonPath('revision', '4')->assertJsonPath('registry_auth_version', 2)->assertJsonCount(1, 'keys');
+    }
+
+    public function test_existing_version_one_registry_can_upgrade_without_changing_its_identity(): void
+    {
+        $state = $this->activate();
+        $this->assertSame(1, $state['registry_auth_version']);
+        $rotation = $this->rotation($state) + ['registry_auth_version' => 2];
+        $this->postJson('/api/v1/crypto/rotation', array_replace($rotation, ['registry_auth_version' => 3]))->assertUnprocessable();
+        $this->assertSame($state, $this->state());
+        $this->postJson('/api/v1/crypto/rotation', array_replace($rotation, ['crypto' => ['epoch' => $state['epoch'], 'revision' => '0']]))
+            ->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
+        $this->assertSame($state, $this->state());
+        $this->postJson('/api/v1/crypto/rotation', $rotation)->assertOk()
+            ->assertJsonPath('registry_auth_version', 2)->assertJsonPath('revision', '2')
+            ->assertJsonPath('identity_key.key_id', $state['identity_key']['key_id']);
+    }
+
+    public function test_registry_version_migration_refuses_to_remove_a_live_version_two_pin(): void
+    {
+        $this->postJson('/api/v1/crypto/activate', $this->activation() + ['registry_auth_version' => 2])->assertOk();
+        $migration = require database_path('migrations/2026_10_16_000001_add_registry_auth_version.php');
+        try {
+            $migration->down();
+            $this->fail('A version-two registry must prevent schema downgrade.');
+        } catch (\RuntimeException $error) {
+            $this->assertSame('Revision-authenticated key registries cannot be downgraded.', $error->getMessage());
+        }
+        $this->assertSame(2, $this->state()['registry_auth_version']);
+    }
+
+    public function test_form_history_and_addresses_use_independent_protected_streams(): void
+    {
+        $capabilities = $this->getJson('/api/v1/capabilities')->assertOk()->json();
+        $state = $this->activate();
+        $payloads = [];
+        foreach (['form-history' => 'form_history', 'addresses' => 'addresses'] as $collection => $feature) {
+            $this->assertContains($collection, $capabilities['collections']);
+            $this->assertContains($feature, $capabilities['features']);
+            $url = '/api/v1/sync/collections/'.$collection;
+            $body = $this->operation($state, 'same-record-id', collection: $collection);
+            $this->postJson($url.'/operations', $body)->assertOk()->assertJsonPath('results.0.status', 'applied');
+            $this->postJson($url.'/operations', $body)->assertOk()->assertJsonPath('results.0.revision', '1');
+            $wrong = $this->operation($state, 'wrong-collection');
+            $wrong['generation'] = $body['generation'];
+            $this->postJson($url.'/operations', $wrong)->assertOk()->assertJsonPath('results.0.status', 'invalid');
+            $deleted = $this->operation($state, 'same-record-id', '1', deleted: true, collection: $collection);
+            $this->postJson($url.'/operations', $deleted)->assertOk()->assertJsonPath('results.0.status', 'applied');
+            $page = $this->getJson($url.'/changes')->assertOk()->assertJsonCount(2, 'changes')
+                ->assertJsonPath('changes.1.record.deleted', true)
+                ->assertJsonPath('changes.1.record.payload', $deleted['operations'][0]['payload'])->json();
+            $this->postJson($url.'/ack', ['cursor' => $page['next_cursor']])->assertOk();
+            $payloads[] = $deleted['operations'][0]['payload'];
+        }
+        $this->assertNotSame($payloads[0], $payloads[1]);
+        $this->assertDatabaseCount('records', 2);
+        $other = User::factory()->create();
+        $this->withToken($this->createNativeSessionToken($other)['token']);
+        foreach (['form-history', 'addresses'] as $collection) {
+            $this->getJson('/api/v1/sync/collections/'.$collection.'/changes')->assertOk()->assertJsonCount(0, 'changes');
+        }
+        $migration = require base_path('database/migrations/2026_10_15_000002_add_form_history_and_addresses.php');
+        $this->expectException(\RuntimeException::class);
+        $migration->down();
     }
 
     public function test_activation_never_accepts_a_recovery_secret_and_requires_separate_identity(): void
@@ -302,6 +397,180 @@ class ClientCustodyTest extends TestCase
             'source_payload' => $deleted['operations'][0]['payload'], 'target_payload' => $created['operations'][0]['payload']]];
     }
 
+    private function control(array $state, string $collection, string $kind, ?string $operationId = null): array
+    {
+        $page = $this->getJson('/api/v1/sync/collections/'.$collection.'/changes')->assertOk()->json();
+
+        return ['version' => 1, 'epoch' => $state['epoch'], 'collection' => $collection,
+            'operation_id' => $operationId ?? (string) Str::uuid(), 'previous_generation' => $page['generation'],
+            'generation' => (string) Str::uuid(), 'control_revision' => (string) ((int) $page['control_revision'] + 1),
+            'kind' => $kind, 'clear_before_ms' => $kind === 'history_clear' ? now()->getTimestampMs() : 0,
+            'proof' => str_repeat('a', 64)];
+    }
+
+    public function test_history_control_is_persisted_replayed_and_returned_with_generation_conflicts(): void
+    {
+        $state = $this->activate();
+        $this->postJson('/api/v1/sync/collections/history/operations', $this->operation($state, 'visit', collection: 'history'))->assertOk();
+        $oldPage = $this->getJson('/api/v1/sync/collections/history/changes')->assertOk()->json();
+        $control = $this->control($state, 'history', 'history_clear');
+        $body = ['crypto' => $this->context($state), 'operation_id' => $control['operation_id'],
+            'generation' => $control['previous_generation'], 'control' => $control];
+        $bad = $body;
+        $bad['control']['control_revision'] = '2';
+        $this->postJson('/api/v1/sync/collections/history/clear', $bad)->assertConflict()->assertJsonPath('error', 'control_state_conflict');
+        $bad['control']['proof'] = null;
+        $this->postJson('/api/v1/sync/collections/history/clear', $bad)->assertUnprocessable();
+        foreach ([0, 1.5, 9007199254741] as $cutoff) {
+            $bad = $body;
+            $bad['control']['clear_before_ms'] = $cutoff;
+            $this->postJson('/api/v1/sync/collections/history/clear', $bad)->assertUnprocessable()->assertJsonPath('error', 'invalid_control');
+        }
+        $this->assertDatabaseCount('records', 1);
+        $response = $this->postJson('/api/v1/sync/collections/history/clear', $body)->assertOk()
+            ->assertJsonPath('deleted_records', 1)->assertJsonPath('control', $control)->json();
+        $this->postJson('/api/v1/sync/collections/history/clear', $body)->assertOk()->assertExactJson($response);
+        $this->getJson('/api/v1/sync/collections/history/changes?cursor='.urlencode($oldPage['next_cursor']))
+            ->assertConflict()->assertJsonPath('error', 'reset_required')->assertJsonPath('control', $control)
+            ->assertJsonPath('generation', $control['generation'])->assertJsonPath('control_revision', '1');
+        $this->getJson('/api/v1/sync/collections/history/changes')->assertOk()->assertJsonCount(0, 'changes')
+            ->assertJsonPath('control', $control)->assertJsonPath('reset.kind', 'history_clear')
+            ->assertJsonPath('reset.clear_before', $response['clear_before']);
+        $this->assertSame($state, $this->state());
+        $body['control']['proof'] = str_repeat('b', 64);
+        $this->postJson('/api/v1/sync/collections/history/clear', $body)->assertConflict()->assertJsonPath('error', 'idempotency_conflict');
+    }
+
+    public function test_consecutive_authenticated_history_clears_preserve_the_exact_signed_cutoff_in_changes(): void
+    {
+        $state = $this->activate();
+        $url = '/api/v1/sync/collections/history';
+        $previous = null;
+        foreach ([1792022400123, 1792022400456] as $index => $cutoff) {
+            $control = $this->control($state, 'history', 'history_clear');
+            $control['clear_before_ms'] = $cutoff;
+            $body = ['crypto' => $this->context($state), 'operation_id' => $control['operation_id'],
+                'generation' => $control['previous_generation'], 'control' => $control];
+            $response = $this->postJson($url.'/clear', $body)->assertOk()->json();
+            $page = $this->getJson($url.'/changes')->assertOk()->assertJsonPath('control', $control)
+                ->assertJsonPath('control_revision', (string) ($index + 1))
+                ->assertJsonPath('generation', $control['generation'])
+                ->assertJsonPath('reset.kind', 'history_clear')->assertJsonPath('reset.clear_before', $response['clear_before'])->json();
+            $this->assertSame($cutoff, Carbon::parse($page['reset']['clear_before'])->getTimestampMs());
+            if ($previous !== null) {
+                $this->assertSame($previous['generation'], $control['previous_generation']);
+                $this->getJson($url.'/changes?cursor='.urlencode($previous['next_cursor']))->assertConflict()
+                    ->assertJsonPath('control', $control)->assertJsonPath('control_revision', '2');
+            }
+            $previous = $page;
+            $this->postJson($url.'/clear', $body)->assertOk()->assertExactJson($response);
+        }
+    }
+
+    public function test_wipe_requires_all_controls_commits_atomically_and_preserves_crypto_identity(): void
+    {
+        $state = $this->activate();
+        $this->postJson('/api/v1/sync/collections/bookmarks/operations', $this->operation($state, 'bookmark'))->assertOk();
+        $operationId = (string) Str::uuid();
+        $controls = array_map(fn ($collection) => $this->control($state, $collection, 'collection_clear', $operationId),
+            SyncNativeEnvelope::COLLECTIONS);
+        $body = ['crypto' => $this->context($state), 'operation_id' => $operationId, 'controls' => $controls];
+        $missing = $body;
+        array_pop($missing['controls']);
+        $this->deleteJson('/api/v1/sync/data', $missing)->assertUnprocessable()->assertJsonPath('error', 'incomplete_controls');
+        $bad = $body;
+        $bad['controls'][count($controls) - 1]['control_revision'] = '2';
+        $this->deleteJson('/api/v1/sync/data', $bad)->assertConflict()->assertJsonPath('error', 'control_state_conflict');
+        $this->assertDatabaseCount('records', 1);
+        $this->assertSame(0, DB::table('sync_streams')->sum('control_revision'));
+        $response = $this->deleteJson('/api/v1/sync/data', $body)->assertOk()->assertJsonPath('controls', $controls)
+            ->assertJsonPath('deleted_records', 1)->json();
+        $this->deleteJson('/api/v1/sync/data', $body)->assertOk()->assertExactJson($response);
+        $this->assertDatabaseCount('records', 0);
+        $this->assertDatabaseCount('sync_controls', 1);
+        $this->assertSame($state, $this->state());
+        foreach ($controls as $control) {
+            $this->getJson('/api/v1/sync/collections/'.$control['collection'].'/changes')->assertOk()
+                ->assertJsonPath('generation', $control['generation'])->assertJsonPath('control', $control);
+        }
+    }
+
+    public function test_compaction_rebases_offline_pages_preserves_tombstones_and_keeps_a_snapshot_fence(): void
+    {
+        $state = $this->activate();
+        foreach ([['a', '0', false], ['a', '1', false], ['b', '0', true]] as [$id, $revision, $deleted]) {
+            $this->postJson('/api/v1/sync/collections/bookmarks/operations', $this->operation($state, $id, $revision, $deleted))->assertOk();
+        }
+        $old = $this->getJson('/api/v1/sync/collections/bookmarks/changes?limit=1')->assertOk()->json();
+        $body = ['crypto' => $this->context($state), 'operation_id' => (string) Str::uuid(),
+            'generation' => $old['generation'], 'snapshot_sequence' => $old['snapshot_sequence']];
+        $response = $this->postJson('/api/v1/sync/collections/bookmarks/compact', $body)->assertOk()
+            ->assertJsonPath('compacted_through', '3')->assertJsonPath('snapshot_sequence', '5')->assertJsonPath('records', 2)->json();
+        $this->postJson('/api/v1/sync/collections/bookmarks/compact', $body)->assertOk()->assertExactJson($response);
+        $this->assertDatabaseCount('sync_changes', 2);
+        $this->assertDatabaseCount('sync_operations', 3);
+        $rebased = $this->getJson('/api/v1/sync/collections/bookmarks/changes?limit=1&cursor='.urlencode($old['next_cursor']))
+            ->assertOk()->assertJsonPath('snapshot_rebased', true)->assertJsonPath('compacted_through', '3')
+            ->assertJsonPath('generation', $old['generation'])->assertJsonPath('snapshot_sequence', '5')->json();
+        $this->postJson('/api/v1/sync/collections/bookmarks/operations', $this->operation($state, 'a', '2'))->assertOk();
+        $next = $this->getJson('/api/v1/sync/collections/bookmarks/changes?cursor='.urlencode($rebased['next_cursor']))
+            ->assertOk()->assertJsonPath('snapshot_sequence', '5')->assertJsonPath('has_more', false)->json();
+        $rows = [...$rebased['changes'], ...$next['changes']];
+        $byId = array_column(array_column($rows, 'record'), null, 'id');
+        $this->assertSame('2', $byId['a']['revision']);
+        $this->assertTrue($byId['b']['deleted']);
+        $this->assertNotSame('', $byId['b']['payload']);
+        $this->getJson('/api/v1/sync/collections/bookmarks/changes?cursor='.urlencode($next['next_cursor']))
+            ->assertOk()->assertJsonPath('changes.0.record.revision', '3');
+        $body['operation_id'] = (string) Str::uuid();
+        $this->postJson('/api/v1/sync/collections/bookmarks/compact', $body)->assertConflict()->assertJsonPath('error', 'snapshot_conflict');
+    }
+
+    public function test_compaction_allows_repeated_rotations_beyond_eight_without_losing_current_ciphertext(): void
+    {
+        $state = $this->activate();
+        $this->postJson('/api/v1/sync/collections/bookmarks/operations', $this->operation($state, 'record'))->assertOk();
+        for ($index = 2; $index <= 10; $index++) {
+            $oldKey = $state['active_key_id'];
+            $rotation = $this->rotation($state, $index);
+            $state = $this->postJson('/api/v1/crypto/rotation', $rotation)->assertOk()->json();
+            $body = $this->operation($state, 'record', (string) ($index - 1));
+            $this->postJson('/api/v1/sync/collections/bookmarks/operations', $body)->assertOk()->assertJsonPath('results.0.status', 'applied');
+            $state = $this->postJson('/api/v1/crypto/rotation/complete', ['crypto' => $this->context($state),
+                'operation_id' => $rotation['operation_id'], 'registry_auth' => str_repeat('f', 64)])->assertOk()->json();
+            $page = $this->getJson('/api/v1/sync/collections/bookmarks/changes')->assertOk()->json();
+            $this->postJson('/api/v1/sync/collections/bookmarks/compact', ['crypto' => $this->context($state),
+                'operation_id' => (string) Str::uuid(), 'generation' => $page['generation'], 'snapshot_sequence' => $page['snapshot_sequence']])->assertOk();
+            $state = $this->deleteJson('/api/v1/crypto/native-keys/'.$oldKey, ['crypto' => $this->context($state),
+                'registry_auth' => str_repeat('a', 64)])->assertOk()->assertJsonCount(1, 'keys')->json();
+            $this->assertDatabaseHas('records', ['record_id' => 'record', 'payload' => $body['operations'][0]['payload'], 'version' => $index]);
+            $this->assertDatabaseCount('sync_changes', 1);
+        }
+        $this->assertSame($this->key(90), $state['identity_key']);
+    }
+
+    public function test_history_collision_merges_with_both_cas_revisions_and_never_resurrects_a_tombstone(): void
+    {
+        [$state, $body] = $this->historyMigration();
+        $targetUrl = '/api/v1/crypto/rotation/history-target';
+        $targetQuery = ['id' => $body['target_id'], 'generation' => $body['generation']];
+        $this->postJson($targetUrl, $targetQuery)->assertOk()->assertJsonPath('record', null);
+        $target = $this->operation($state, $body['target_id'], deleted: true, collection: 'history');
+        $this->postJson('/api/v1/sync/collections/history/operations', $target)->assertOk();
+        $this->postJson($targetUrl, $targetQuery)->assertOk()->assertJsonPath('record.revision', '1')->assertJsonPath('record.deleted', true);
+        $body['target_revision'] = '9';
+        $this->postJson('/api/v1/crypto/rotation/history-id', $body)->assertConflict()->assertJsonPath('error', 'history_target_conflict');
+        $body['target_revision'] = '1';
+        $this->postJson('/api/v1/crypto/rotation/history-id', $body)->assertConflict()->assertJsonPath('error', 'history_target_deleted');
+        $this->assertDatabaseHas('records', ['record_id' => $body['source_id'], 'deleted' => false, 'version' => 1]);
+        $body['target_deleted'] = true;
+        $body['target_payload'] = $this->operation($state, $body['target_id'], '1', deleted: true, collection: 'history')['operations'][0]['payload'];
+        $response = $this->postJson('/api/v1/crypto/rotation/history-id', $body)->assertOk()
+            ->assertJsonPath('source_revision', '2')->assertJsonPath('target_revision', '2')->assertJsonPath('target_deleted', true)->json();
+        $this->postJson('/api/v1/crypto/rotation/history-id', $body)->assertOk()->assertExactJson($response);
+        $this->assertDatabaseHas('records', ['record_id' => $body['target_id'], 'deleted' => true, 'version' => 2]);
+    }
+
     public function test_history_id_migration_is_atomic_idempotent_and_exports_old_ids_even_after_reciphering(): void
     {
         [$state, $body] = $this->historyMigration();
@@ -312,6 +581,10 @@ class ClientCustodyTest extends TestCase
         $this->assertDatabaseHas('records', ['record_id' => $body['target_id'], 'deleted' => false, 'payload' => $body['target_payload']]);
         $this->assertDatabaseCount('sync_changes', 3);
         $this->assertDatabaseCount('sync_history_id_migrations', 1);
+        $deviceId = DB::table('sync_sessions')->where('user_id', $this->user->id)->value('device_id');
+        $legacyFingerprint = hash('sha256', json_encode([$deviceId, $body['rotation_id'], $body['generation'],
+            $body['source_id'], $body['source_revision'], $body['target_id'], $body['source_payload'], $body['target_payload'], null], JSON_THROW_ON_ERROR));
+        $this->assertDatabaseHas('sync_history_id_migrations', ['operation_id' => $body['operation_id'], 'fingerprint' => $legacyFingerprint]);
         $changed = array_replace($body, ['target_id' => 'h2:'.str_repeat('c', 64)]);
         $this->postJson('/api/v1/crypto/rotation/history-id', $changed)->assertConflict()->assertJsonPath('error', 'idempotency_conflict');
         $remaining = $this->getJson('/api/v1/crypto/rotation/records')->assertOk()->json('records');

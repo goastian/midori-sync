@@ -79,6 +79,25 @@ class BrowserSyncLoginTest extends TestCase
         $this->assertDatabaseCount('sync_browser_authorizations', 0);
     }
 
+    public function test_interactive_login_has_time_for_mfa_and_expired_requests_cannot_authorize(): void
+    {
+        $user = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);
+        $this->actingAs($user)->get('/auth/desktop?'.http_build_query([
+            'state' => str_repeat('s', 43), 'code_challenge' => str_repeat('c', 43),
+            'redirect_uri' => 'http://127.0.0.1:41831/midori-sync/callback',
+        ]))->assertRedirect(route('auth.desktop.confirm'));
+        $this->travel(4)->minutes();
+        $this->get('/auth/desktop/confirm')->assertOk()->assertSee('Connect Midori Desktop');
+        $this->travel(7)->minutes();
+        $this->get('/auth/desktop/confirm')->assertStatus(410)
+            ->assertSee('This connection request has expired')->assertDontSee('Exception trace');
+        $this->assertNull(session('sync_browser_authorization'));
+        $this->post('/auth/desktop/confirm')->assertStatus(410)->assertSee('This connection request has expired');
+        $this->assertDatabaseCount('sync_browser_authorizations', 0);
+        $this->assertDatabaseCount('devices', 0);
+        $this->assertAuthenticatedAs($user);
+    }
+
     public function test_authentik_callback_returns_to_the_pending_desktop_connection(): void
     {
         $user = User::factory()->create(['authentik_issuer' => null]);

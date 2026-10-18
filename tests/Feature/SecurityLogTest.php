@@ -51,11 +51,14 @@ class SecurityLogTest extends TestCase
             };
         });
 
-        $this->getJson('/api/v1/devices', ['Authorization' => 'Bearer notreal'])
+        $this->getJson('/api/v1/devices?code=synthetic-secret-code', ['Authorization' => 'Bearer synthetic-secret-token'])
             ->assertStatus(401);
 
         $events = array_column($captured, 1);
         $this->assertContains(SecurityLog::EVENT_TOKEN_INVALID, $events);
+        $serialized = json_encode($captured, JSON_THROW_ON_ERROR);
+        $this->assertStringNotContainsString('synthetic-secret-code', $serialized);
+        $this->assertStringNotContainsString('synthetic-secret-token', $serialized);
     }
 
     public function test_quota_exceeded_emits_event(): void

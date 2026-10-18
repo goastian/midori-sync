@@ -332,11 +332,13 @@ class NativeCryptoTest extends TestCase
         $fixture = json_decode(file_get_contents(__DIR__.'/../Fixtures/native-sodium.json'), true, flags: JSON_THROW_ON_ERROR);
         $parser = app(SyncNativeEnvelope::class);
         $parser->validateBundle($fixture['key_id'], json_encode($fixture['bundle'], JSON_THROW_ON_ERROR));
-        $envelope = $fixture['records']['bookmarks']['record']['envelope'];
-        $this->assertTrue($parser->validRecord([
-            'deleted' => false, 'id' => $envelope['context']['id'], 'base_revision' => $envelope['context']['base_revision'],
-            'payload' => json_encode($envelope, JSON_THROW_ON_ERROR),
-        ], 'bookmarks', $envelope['context']['generation'], $fixture['key_id']));
+        foreach (SyncNativeEnvelope::COLLECTIONS as $collection) {
+            $envelope = $fixture['records'][$collection]['record']['envelope'];
+            $this->assertTrue($parser->validRecord([
+                'deleted' => false, 'id' => $envelope['context']['id'], 'base_revision' => $envelope['context']['base_revision'],
+                'payload' => json_encode($envelope, JSON_THROW_ON_ERROR),
+            ], $collection, $envelope['context']['generation'], $fixture['key_id']));
+        }
     }
 
     public function test_account_boundaries_apply_to_state_keys_and_preconditions(): void

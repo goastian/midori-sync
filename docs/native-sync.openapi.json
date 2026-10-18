@@ -799,7 +799,7 @@
       "delete": {
         "operationId": "eraseSyncData",
         "summary": "Explicitly erase Sync data and rotate generations",
-        "description": "Body limit 8192 bytes. Removes Sync records, key bundles, receipts and acknowledgements atomically. Rotates key epoch and stream generations. A native account remains native with no active key; legacy writing is not reenabled. Clients must reconcile the reset, never blindly republish old local data. Client/transition custody returns 409 authenticated_control_required until authenticated global controls exist.",
+        "description": "Body limit 24576 bytes. Client/transition custody requires authenticated collection_clear controls for all advertised collections, atomically CASing their generations/revisions. Returns 200 and preserves crypto epoch, registry, identity and recovery bundles. Missing controls returns authenticated_control_required. Legacy server custody with crypto alone returns 204, erases bundles and rotates epoch/generations. Clients verify signed controls before local deletion; unsigned resets have no such authority.",
         "requestBody": {
           "required": true,
           "content": {
@@ -839,6 +839,24 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          },
+          "200": {
+            "description": "Committed result or exact receipt replay",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WipeResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1090,7 +1108,7 @@
       "post": {
         "operationId": "clearHistoryAcrossDevices",
         "summary": "Clear synchronized history across devices",
-        "description": "Native version-2 session only. The authenticated transaction removes history records, changes and outstanding operation receipts, rotates only the history generation, and records a durable cutoff. A retry with the same operation_id and previous generation returns the original response. Old cursors and writes fail with reset_required. Clients must process the history_clear marker before capturing or uploading local history. Client/transition custody returns 409 authenticated_control_required until authenticated global controls exist.",
+        "description": "Body limit 24576 bytes. Client/transition custody requires a history_clear control signed by the client identity key; the server validates shape/CAS and retains its opaque proof. Deletes synchronized history and old journal, installs the client generation and cutoff, and stores an exact replay receipt. Missing control returns authenticated_control_required. Old cursors/writes return reset_required plus the current control; clients authenticate before native deletion. Legacy server custody retains its previous unsigned control semantics.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1131,6 +1149,9 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
           }
         }
       }
@@ -1404,7 +1425,7 @@
             }
           }
         },
-        "description": "Atomically creates the h2 target and authenticates the h1 tombstone. Target TTL must preserve the source TTL. Replay returns the durable result after completion despite an older crypto revision, but requires the same epoch, device and content. Source CAS failure is history_source_conflict; an existing target is history_target_exists. The source payload is replaced before creating the target, so quota requires only the final tombstone and target sizes; quota failure rolls back both changes and all receipts. Request limit is 600000 UTF-8 bytes."
+        "description": "Atomically CAS both the h1 source and h2 target; target_revision defaults to 0 (absent). Clients fetch/authenticate an existing target, merge content, and send its exact revision. Existing deleted target requires target_deleted true; expired TTL cannot be extended. Source becomes a schema-2 tombstone; target retains deletion or earliest TTL. Source conflict is history_source_conflict; target conflict is history_target_exists when expected absent, otherwise history_target_conflict. Exact replay returns both revisions after completion despite stale crypto revision, with same epoch/device/content. Source replacement first means quota needs only final payload sizes. Any failure rolls back records, changes and receipts. Request limit 600000 UTF-8 bytes."
       }
     },
     "/auth/browser-token": {
@@ -1443,6 +1464,126 @@
           }
         },
         "security": []
+      }
+    },
+    "/crypto/rotation/history-target": {
+      "post": {
+        "operationId": "readHistoryMigrationTarget",
+        "summary": "Read a collision target during active rotation",
+        "description": "Body limit 8192 bytes. Live session, owned device and identity are checked under the account lock. A missing target returns record null. Requires current generation and a rewriting rotation. No secrets are placed in the query string.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryTargetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed result or exact receipt replay",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryTargetResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/sync/collections/{name}/compact": {
+      "post": {
+        "operationId": "compactCollectionJournal",
+        "summary": "Replace historical changes with current ciphertext snapshots",
+        "description": "Body limit 24576 bytes. Client custody only. CAS current snapshot_sequence (snapshot_conflict on concurrent change). Every current record must use active schema-2 key, otherwise rotation_records_pending. Preserves generation, record revisions, encrypted tombstones and operation receipts. Changes receive new monotonic sequence numbers. Old cursors explicitly rebase; no local erasure is authorized. Exact replay remains valid after key retirement; changed operation content returns idempotency_conflict.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompactRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed result or exact receipt replay",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "426": {
+            "$ref": "#/components/responses/UpgradeRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Collection"
+            }
+          }
+        ]
       }
     }
   },
@@ -1687,7 +1828,9 @@
           "midori-privacy",
           "devices",
           "passwords",
-          "credit-cards"
+          "credit-cards",
+          "form-history",
+          "addresses"
         ]
       },
       "Identity": {
@@ -1766,6 +1909,22 @@
         "properties": {
           "error": {
             "type": "string"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "control_revision": {
+            "$ref": "#/components/schemas/Counter"
+          },
+          "control": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AuthenticatedControl"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1918,6 +2077,14 @@
                 "type": "null"
               }
             ]
+          },
+          "registry_auth_version": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "description": "Version 2 authenticates the resulting crypto revision in the key-registry MAC. Omission in requests is legacy version 1; a version-2 registry cannot downgrade."
           }
         },
         "required": [
@@ -1934,7 +2101,8 @@
           "custody",
           "identity_key",
           "registry_auth",
-          "rotation"
+          "rotation",
+          "registry_auth_version"
         ]
       },
       "Account": {
@@ -2347,14 +2515,41 @@
                 "const": 1
               },
               "authenticated_controls": {
-                "const": false
+                "const": true
+              },
+              "compaction_version": {
+                "const": 1
+              },
+              "history_reconciliation_version": {
+                "const": 1
+              },
+              "registry_auth_version": {
+                "const": 2
               }
             },
             "required": [
               "version",
               "rotation_version",
-              "authenticated_controls"
+              "authenticated_controls",
+              "compaction_version",
+              "history_reconciliation_version",
+              "registry_auth_version"
             ]
+          },
+          "collections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Collection"
+            },
+            "uniqueItems": true
+          },
+          "data_schemas": {
+            "type": "object",
+            "description": "Highest client plaintext schema generation documented per collection. The server stores ciphertext only.",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         },
         "required": [
@@ -2367,7 +2562,8 @@
           "crypto_state_version",
           "crypto_versions",
           "features",
-          "limits"
+          "limits",
+          "collections"
         ]
       },
       "Record": {
@@ -2445,6 +2641,26 @@
           },
           "reset": {
             "$ref": "#/components/schemas/HistoryClearMarker"
+          },
+          "control_revision": {
+            "$ref": "#/components/schemas/Counter"
+          },
+          "control": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AuthenticatedControl"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "compacted_through": {
+            "$ref": "#/components/schemas/Counter"
+          },
+          "snapshot_rebased": {
+            "type": "boolean",
+            "description": "An older cursor was rebased to current-record snapshots after compaction. Never authorizes local deletion."
           }
         },
         "required": [
@@ -2452,7 +2668,11 @@
           "changes",
           "snapshot_sequence",
           "has_more",
-          "next_cursor"
+          "next_cursor",
+          "control_revision",
+          "control",
+          "compacted_through",
+          "snapshot_rebased"
         ]
       },
       "AckRequest": {
@@ -2700,6 +2920,15 @@
           },
           "custody": {
             "const": "client"
+          },
+          "registry_auth_version": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "description": "Version 2 authenticates the resulting crypto revision in the key-registry MAC. Omission in requests is legacy version 1; a version-2 registry cannot downgrade.",
+            "default": 1
           }
         },
         "required": [
@@ -2753,11 +2982,23 @@
         "properties": {
           "crypto": {
             "$ref": "#/components/schemas/CryptoContext"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "controls": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/components/schemas/AuthenticatedControl"
+            }
           }
         },
         "required": [
           "crypto"
-        ]
+        ],
+        "description": "Client/transition custody requires operation_id and one collection_clear control for every advertised collection; legacy server custody may use crypto alone."
       },
       "NativeKdf": {
         "type": "object",
@@ -3031,7 +3272,8 @@
           "kind",
           "clear_before"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Compatibility projection of history clear cutoff. In client/transition custody it must match the authenticated control exactly, including milliseconds; this marker alone has no authority."
       },
       "HistoryClearRequest": {
         "type": "object",
@@ -3044,13 +3286,17 @@
           },
           "crypto": {
             "$ref": "#/components/schemas/CryptoContext"
+          },
+          "control": {
+            "$ref": "#/components/schemas/AuthenticatedControl"
           }
         },
         "required": [
           "operation_id",
           "generation",
           "crypto"
-        ]
+        ],
+        "description": "control is required for client/transition custody. Its previous_generation and operation_id must match the outer fields."
       },
       "HistoryClearResponse": {
         "type": "object",
@@ -3071,6 +3317,9 @@
           "deleted_records": {
             "type": "integer",
             "minimum": 0
+          },
+          "control": {
+            "$ref": "#/components/schemas/AuthenticatedControl"
           }
         },
         "required": [
@@ -3084,7 +3333,7 @@
       "RegistryAuth": {
         "type": "string",
         "pattern": "^[0-9a-f]{64}$",
-        "description": "Opaque client MAC authenticating epoch, active data key, wrapped identity key, sorted complete wrapped data-key registry, custody, server_recovery and stable rotation metadata. Excludes revision and progress counters; client verifies after recovering its identity key."
+        "description": "Opaque lowercase hexadecimal MAC with the independent identity key. Version 2 signs [\"MidoriSync/key-registry/v2\", epoch, resulting revision as a decimal string, active_key_id, identity_key, sorted data keys, custody, server_recovery, stableRotation]. Each new crypto mutation signs current revision + 1. Version 1 omits revision for legacy compatibility."
       },
       "Rotation": {
         "type": "object",
@@ -3154,7 +3403,16 @@
           "registry_auth": {
             "$ref": "#/components/schemas/RegistryAuth"
           },
-          "recovery_secret": false
+          "recovery_secret": false,
+          "registry_auth_version": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "description": "Version 2 authenticates the resulting crypto revision in the key-registry MAC. Omission in requests is legacy version 1; a version-2 registry cannot downgrade.",
+            "default": 1
+          }
         },
         "required": [
           "crypto",
@@ -3178,7 +3436,16 @@
           "registry_auth": {
             "$ref": "#/components/schemas/RegistryAuth"
           },
-          "recovery_secret": false
+          "recovery_secret": false,
+          "registry_auth_version": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "description": "Version 2 authenticates the resulting crypto revision in the key-registry MAC. Omission in requests is legacy version 1; a version-2 registry cannot downgrade.",
+            "default": 1
+          }
         },
         "required": [
           "crypto",
@@ -3194,6 +3461,15 @@
           },
           "registry_auth": {
             "$ref": "#/components/schemas/RegistryAuth"
+          },
+          "registry_auth_version": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "description": "Version 2 authenticates the resulting crypto revision in the key-registry MAC. Omission in requests is legacy version 1; a version-2 registry cannot downgrade.",
+            "default": 1
           }
         },
         "required": [
@@ -3289,7 +3565,16 @@
               "null"
             ],
             "maxLength": 64,
-            "description": "Must match the current source TTL, normalized to UTC whole seconds. Past timestamps are allowed; authenticated target payload must preserve this TTL."
+            "description": "For live target, the earliest non-null current source/target TTL, UTC whole seconds, including expired values. For target_deleted true, null. Authenticated payload must match."
+          },
+          "target_revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,9})$",
+            "default": "0"
+          },
+          "target_deleted": {
+            "type": "boolean",
+            "default": false
           }
         },
         "required": [
@@ -3329,6 +3614,9 @@
           },
           "target_revision": {
             "$ref": "#/components/schemas/Revision"
+          },
+          "target_deleted": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -3362,6 +3650,179 @@
           "code",
           "code_verifier",
           "device_name"
+        ]
+      },
+      "AuthenticatedControl": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "epoch": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "collection": {
+            "$ref": "#/components/schemas/Collection"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "previous_generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "control_revision": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,15}$",
+            "description": "CAS current control revision + 1, at most 9007199254740991."
+          },
+          "kind": {
+            "enum": [
+              "history_clear",
+              "collection_clear"
+            ]
+          },
+          "clear_before_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740,
+            "description": "Positive UTC milliseconds for history_clear; exactly 0 for collection_clear."
+          },
+          "proof": {
+            "$ref": "#/components/schemas/RegistryAuth"
+          }
+        },
+        "required": [
+          "version",
+          "epoch",
+          "collection",
+          "operation_id",
+          "previous_generation",
+          "generation",
+          "control_revision",
+          "kind",
+          "clear_before_ms",
+          "proof"
+        ],
+        "description": "Client MAC using identity devices subkey over JSON [\"MidoriSync/control/v1\",epoch,collection,operation_id,previous_generation,generation,control_revision,kind,clear_before_ms]. Server stores the tag opaquely. Receivers must verify it and anchored revision before destructive local actions."
+      },
+      "WipeResponse": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "controls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthenticatedControl"
+            }
+          },
+          "deleted_records": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "operation_id",
+          "controls",
+          "deleted_records"
+        ]
+      },
+      "HistoryTargetRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^h2:[0-9a-f]{64}$"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          }
+        },
+        "required": [
+          "id",
+          "generation"
+        ]
+      },
+      "HistoryTargetResponse": {
+        "type": "object",
+        "properties": {
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "rotation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "record": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Record"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "generation",
+          "rotation_id",
+          "record"
+        ]
+      },
+      "CompactRequest": {
+        "type": "object",
+        "properties": {
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "snapshot_sequence": {
+            "$ref": "#/components/schemas/Counter"
+          }
+        },
+        "required": [
+          "crypto",
+          "operation_id",
+          "generation",
+          "snapshot_sequence"
+        ]
+      },
+      "CompactResponse": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "compacted_through": {
+            "$ref": "#/components/schemas/Counter"
+          },
+          "snapshot_sequence": {
+            "$ref": "#/components/schemas/Counter"
+          },
+          "records": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "operation_id",
+          "generation",
+          "compacted_through",
+          "snapshot_sequence",
+          "records"
         ]
       }
     }
