@@ -7,6 +7,12 @@ y el proyecto usa [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Device enrollment API under `/api/v1/crypto/enrollments` so a signed-in device
+  without keys can request end-to-end encrypted approval from an unlocked
+  device; advertised as `crypto.enrollment` in `/capabilities`.
+
 ### Changed
 
 - Midori Desktop now uses the native Sync client through `/api/v1`.
