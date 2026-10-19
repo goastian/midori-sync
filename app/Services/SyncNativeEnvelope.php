@@ -6,7 +6,16 @@ use App\Exceptions\SyncProtocolException;
 
 class SyncNativeEnvelope
 {
-    public const COLLECTIONS = ['bookmarks', 'history', 'tabs', 'browser-settings', 'midori-tab', 'midori-privacy', 'devices', 'passwords', 'credit-cards'];
+    public const COLLECTIONS = ['bookmarks', 'history', 'tabs', 'browser-settings', 'midori-tab', 'midori-privacy', 'devices', 'passwords', 'credit-cards', 'form-history', 'addresses'];
+
+    /**
+     * Highest client plaintext schema generation each collection documents. The server only stores
+     * ciphertext; this lets clients negotiate before writing fields an older client would quarantine.
+     */
+    public const DATA_SCHEMAS = [
+        'bookmarks' => 2, 'history' => 2, 'tabs' => 2, 'browser-settings' => 1, 'passwords' => 1,
+        'credit-cards' => 1, 'form-history' => 1, 'addresses' => 1,
+    ];
 
     public function supportsCollection(string $name): bool
     {

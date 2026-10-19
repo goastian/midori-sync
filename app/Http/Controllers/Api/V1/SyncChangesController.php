@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Services\SyncBrowserAuthorizationService;
 use App\Services\SyncChangeJournal;
 use App\Services\SyncIdentityService;
+use App\Services\SyncNativeEnvelope;
 use App\Services\SyncNativeOidcService;
 use App\Services\SyncRefreshService;
 use App\Services\SyncStorageService;
@@ -44,10 +45,15 @@ class SyncChangesController extends Controller
             'operations_version' => 1,
             'crypto_state_version' => 1,
             'crypto_custody_version' => 1,
+            'crypto' => ['enrollment' => true, 'reset' => true],
             'record_schema_versions' => [1, 2],
-            'client_recovery' => ['version' => 1, 'rotation_version' => 1, 'authenticated_controls' => false],
+            'client_recovery' => ['version' => 1, 'rotation_version' => 1, 'registry_auth_version' => 2, 'authenticated_controls' => true,
+                'compaction_version' => 1, 'history_reconciliation_version' => 1],
             'crypto_versions' => [2],
-            'features' => ['opaque_cursors', 'snapshot_fence', 'tombstones', 'device_acknowledgements', 'conditional_operations', 'idempotent_operations', 'credit_cards'],
+            'collections' => SyncNativeEnvelope::COLLECTIONS,
+            'features' => ['opaque_cursors', 'snapshot_fence', 'tombstones', 'device_acknowledgements', 'conditional_operations', 'idempotent_operations', 'credit_cards', 'form_history', 'addresses', 'journal_compaction', 'authenticated_controls',
+                'bookmark_labels', 'history_parts', 'history_visit_removals', 'tab_fragments'],
+            'data_schemas' => SyncNativeEnvelope::DATA_SCHEMAS,
             'limits' => [
                 'change_page_records' => SyncChangeJournal::MAX_PAGE_SIZE,
                 'change_page_payload_bytes' => SyncChangeJournal::MAX_PAGE_BYTES,
@@ -113,12 +119,16 @@ class SyncChangesController extends Controller
 
     public function clearHistory(Request $request): JsonResponse
     {
+        if (strlen($request->getContent()) > 24576) {
+            throw new SyncProtocolException('request_too_large', 413);
+        }
         $data = $request->validate([
             'operation_id' => ['required', 'uuid'],
             'generation' => ['required', 'uuid'],
             'crypto' => ['required', 'array:epoch,revision'],
             'crypto.epoch' => ['required', 'uuid'],
             'crypto.revision' => ['required', 'string', 'regex:/^(0|[1-9][0-9]{0,9})$/D'],
+            'control' => ['sometimes', 'required', 'array'],
         ]);
 
         return response()->json($this->storage->clearHistory(
@@ -127,7 +137,25 @@ class SyncChangesController extends Controller
             $data['operation_id'],
             $data['generation'],
             $data['crypto'] + ['session_id' => $request->input('sync_session')->id],
+            $data['control'] ?? null,
         ))->header('Cache-Control', 'no-store');
+    }
+
+    public function compact(Request $request, string $name): JsonResponse
+    {
+        if (strlen($request->getContent()) > 24576) {
+            throw new SyncProtocolException('request_too_large', 413);
+        }
+        $data = $request->validate([
+            'crypto' => ['required', 'array:epoch,revision'], 'crypto.epoch' => ['required', 'uuid'],
+            'crypto.revision' => ['required', 'string', 'regex:/^(0|[1-9][0-9]{0,9})$/D'],
+            'operation_id' => ['required', 'uuid'], 'generation' => ['required', 'uuid'],
+            'snapshot_sequence' => ['required', 'string', 'regex:/^(0|[1-9][0-9]{0,18})$/D'],
+        ]);
+
+        return response()->json($this->storage->compactCollection($request->user()->id, $this->deviceId($request),
+            $name, $data['operation_id'], $data['generation'], $data['snapshot_sequence'],
+            $data['crypto'] + ['session_id' => $request->input('sync_session')->id]))->header('Cache-Control', 'no-store');
     }
 
     private function deviceId(Request $request): int

@@ -14,6 +14,15 @@ class CollectionController extends Controller
         private SyncStorageService $storage,
     ) {}
 
+    private const HIDDEN_ON_WEB = ['credit-cards'];
+
+    private function abortIfHidden(string $name): void
+    {
+        if (in_array($name, self::HIDDEN_ON_WEB, true)) {
+            abort(404);
+        }
+    }
+
     public function index(Request $request)
     {
         $user = $request->user();
@@ -23,7 +32,7 @@ class CollectionController extends Controller
         $usedBytes = (int) ($syncInfo['used_bytes'] ?? 0);
         $quotaBytes = (int) ($syncInfo['quota_bytes'] ?? 0);
 
-        $collections = Collection::all()->map(function ($collection) use ($status, $usedBytes, $quotaBytes) {
+        $collections = Collection::whereNotIn('name', self::HIDDEN_ON_WEB)->get()->map(function ($collection) use ($status, $usedBytes, $quotaBytes) {
             $stat = $status[$collection->name] ?? null;
             $sizeBytes = (int) ($stat['size_bytes'] ?? 0);
             return [
@@ -61,19 +70,13 @@ class CollectionController extends Controller
 
     public function show(Request $request, string $name)
     {
+        $this->abortIfHidden($name);
         $user = $request->user();
         $collection = Collection::findByName($name);
 
         if (!$collection) {
             abort(404);
         }
-
-        $records = $this->storage->getRecords(
-            userId: $user->id,
-            collectionName: $name,
-            sort: 'newest',
-            limit: 100,
-        );
 
         $status = $this->storage->getCollectionStatus($user->id);
         $stat = $status[$name] ?? [];
@@ -83,7 +86,6 @@ class CollectionController extends Controller
 
         return Inertia::render('Collections/Show', [
             'collection' => $collection,
-            'records' => $records,
             'meta' => [
                 'total' => $stat['record_count'] ?? 0,
                 'size_bytes' => $sizeBytes,
@@ -95,6 +97,7 @@ class CollectionController extends Controller
 
     public function destroyRecord(Request $request, string $name, string $recordId)
     {
+        $this->abortIfHidden($name);
         $user = $request->user();
         $this->storage->deleteRecord($user->id, $name, $recordId);
 
@@ -103,6 +106,7 @@ class CollectionController extends Controller
 
     public function destroyCollection(Request $request, string $name)
     {
+        $this->abortIfHidden($name);
         $user = $request->user();
         $this->storage->deleteCollection($user->id, $name);
 
@@ -111,6 +115,7 @@ class CollectionController extends Controller
 
     public function export(Request $request, string $name)
     {
+        $this->abortIfHidden($name);
         $user = $request->user();
         $collection = Collection::findByName($name);
 

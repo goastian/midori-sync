@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\DeviceEnrollment;
 use App\Services\SyncAuthService;
 use App\Services\SyncNotificationTickets;
 use App\Services\SyncStorageService;
@@ -21,8 +22,9 @@ class CleanupExpired extends Command
         $exchanges = DB::table('sync_native_oidc_exchanges')->where('expires_at', '<=', now())->delete();
         $authorizations = DB::table('sync_browser_authorizations')->where('expires_at', '<=', now())->delete();
         $expiredTickets = $tickets->cleanupExpired();
+        $enrollments = DeviceEnrollment::purgeExpired();
 
-        $this->info("Cleaned up {$records} expired records, {$sessions} expired sessions and {$exchanges} OIDC exchanges; {$expiredTickets} notification tickets; {$authorizations} browser authorizations.");
+        $this->info("Cleaned up {$records} expired records, {$sessions} expired sessions and {$exchanges} OIDC exchanges; {$expiredTickets} notification tickets; {$authorizations} browser authorizations; {$enrollments} device enrollments.");
 
         return self::SUCCESS;
     }

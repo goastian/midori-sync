@@ -32,17 +32,18 @@ class SyncNativeCryptoService
         }, 5);
     }
 
-    public function activate(int $userId, array $context, string $keyId, string $bundle, bool $revokeIncompatible, ?array $identityKey = null, string $registryAuth = ''): array
+    public function activate(int $userId, array $context, string $keyId, string $bundle, bool $revokeIncompatible, ?array $identityKey = null, string $registryAuth = '', int $registryAuthVersion = 1): array
     {
         $this->envelope->validateBundle($keyId, $bundle);
         $this->validateIdentityKey($identityKey, [$keyId]);
         $this->validateRegistryAuth($registryAuth);
 
-        return DB::transaction(function () use ($userId, $context, $keyId, $bundle, $revokeIncompatible, $identityKey, $registryAuth) {
+        return DB::transaction(function () use ($userId, $context, $keyId, $bundle, $revokeIncompatible, $identityKey, $registryAuth, $registryAuthVersion) {
             $this->journal->lockUser($userId);
             $this->requireSession($userId, $context['session_id']);
             $state = $this->state($userId);
             $this->requireRevision($state, $context);
+            $this->requireRegistryVersion($state, $registryAuthVersion);
             if ($state->active_key_id !== null) {
                 throw new SyncProtocolException('native_keys_already_active', 409);
             }
@@ -62,7 +63,7 @@ class SyncNativeCryptoService
                 'native_enabled' => true, 'active_key_id' => $keyId, 'revision' => $state->revision + 1,
                 'custody' => 'client', 'identity_key_id' => $identityKey['key_id'],
                 'identity_bundle' => $identityKey['encrypted_bundle'],
-                'registry_auth' => $registryAuth,
+                'registry_auth' => $registryAuth, 'registry_auth_version' => $registryAuthVersion,
             ]);
 
             return $this->format($this->state($userId));
@@ -108,15 +109,19 @@ class SyncNativeCryptoService
         }, 5);
     }
 
-    public function startRotation(int $userId, array $context, string $operationId, string $keyId, string $bundle, array $keys, array $identityKey, string $registryAuth): array
+    public function startRotation(int $userId, array $context, string $operationId, string $keyId, string $bundle, array $keys, array $identityKey, string $registryAuth, int $registryAuthVersion = 1): array
     {
         $this->envelope->validateBundle($keyId, $bundle);
         $this->validateRegistryAuth($registryAuth);
         usort($keys, fn ($left, $right) => strcmp($left['key_id'], $right['key_id']));
         $operationId = strtolower($operationId);
-        $fingerprint = hash('sha256', json_encode([$keyId, $bundle, $keys, $identityKey, $registryAuth], JSON_THROW_ON_ERROR));
+        $fingerprintParts = [$keyId, $bundle, $keys, $identityKey, $registryAuth];
+        if ($registryAuthVersion !== 1) {
+            $fingerprintParts[] = $registryAuthVersion;
+        }
+        $fingerprint = hash('sha256', json_encode($fingerprintParts, JSON_THROW_ON_ERROR));
 
-        return DB::transaction(function () use ($userId, $context, $operationId, $keyId, $bundle, $keys, $identityKey, $fingerprint, $registryAuth) {
+        return DB::transaction(function () use ($userId, $context, $operationId, $keyId, $bundle, $keys, $identityKey, $fingerprint, $registryAuth, $registryAuthVersion) {
             $this->journal->lockUser($userId);
             $this->requireSession($userId, $context['session_id']);
             $state = $this->state($userId);
@@ -129,6 +134,7 @@ class SyncNativeCryptoService
                 return $this->format($state);
             }
             $this->authorizeWrite($userId, $context);
+            $this->requireRegistryVersion($state, $registryAuthVersion);
             if (! $state->active_key_id) {
                 throw new SyncProtocolException('native_keys_required', 409);
             }
@@ -160,7 +166,7 @@ class SyncNativeCryptoService
             DB::table('sync_crypto_states')->where('user_id', $userId)->update([
                 'active_key_id' => $keyId, 'revision' => $state->revision + 1, 'custody' => 'transition',
                 'identity_key_id' => $identityKey['key_id'], 'identity_bundle' => $identityKey['encrypted_bundle'],
-                'registry_auth' => $registryAuth,
+                'registry_auth' => $registryAuth, 'registry_auth_version' => $registryAuthVersion,
             ]);
             DB::table('sync_key_rotations')->updateOrInsert(['user_id' => $userId], [
                 'operation_id' => $operationId, 'fingerprint' => $fingerprint, 'target_key_id' => $keyId,
@@ -172,11 +178,11 @@ class SyncNativeCryptoService
         }, 5);
     }
 
-    public function completeRotation(int $userId, array $context, string $operationId, string $registryAuth): array
+    public function completeRotation(int $userId, array $context, string $operationId, string $registryAuth, int $registryAuthVersion = 1): array
     {
         $this->validateRegistryAuth($registryAuth);
 
-        return DB::transaction(function () use ($userId, $context, $operationId, $registryAuth) {
+        return DB::transaction(function () use ($userId, $context, $operationId, $registryAuth, $registryAuthVersion) {
             $this->journal->lockUser($userId);
             $this->requireSession($userId, $context['session_id']);
             $state = $this->state($userId);
@@ -188,12 +194,13 @@ class SyncNativeCryptoService
                 return $this->format($state);
             }
             $this->authorizeWrite($userId, $context);
+            $this->requireRegistryVersion($state, $registryAuthVersion);
             if ($rotation['live_records'] !== 0) {
                 throw new SyncProtocolException('rotation_records_pending', 409);
             }
             DB::table('sync_server_recovery')->where('user_id', $userId)->delete();
             DB::table('sync_crypto_states')->where('user_id', $userId)->update([
-                'custody' => 'client', 'revision' => $state->revision + 1, 'registry_auth' => $registryAuth,
+                'custody' => 'client', 'revision' => $state->revision + 1, 'registry_auth' => $registryAuth, 'registry_auth_version' => $registryAuthVersion,
             ]);
             DB::table('sync_key_rotations')->where('user_id', $userId)->update(['phase' => 'complete', 'updated_at' => now()]);
 
@@ -201,13 +208,14 @@ class SyncNativeCryptoService
         }, 5);
     }
 
-    public function retireKey(int $userId, array $context, string $keyId, string $registryAuth): array
+    public function retireKey(int $userId, array $context, string $keyId, string $registryAuth, int $registryAuthVersion = 1): array
     {
         $this->validateRegistryAuth($registryAuth);
 
-        return DB::transaction(function () use ($userId, $context, $keyId, $registryAuth) {
+        return DB::transaction(function () use ($userId, $context, $keyId, $registryAuth, $registryAuthVersion) {
             $this->journal->lockUser($userId);
             $state = $this->authorizeWrite($userId, $context);
+            $this->requireRegistryVersion($state, $registryAuthVersion);
             if (! $state || $state->custody !== 'client' || $state->active_key_id === $keyId || $state->identity_key_id === $keyId) {
                 throw new SyncProtocolException('key_retirement_forbidden', 409);
             }
@@ -227,7 +235,7 @@ class SyncNativeCryptoService
                 }
             }
             $key->delete();
-            DB::table('sync_crypto_states')->where('user_id', $userId)->update(['revision' => $state->revision + 1, 'registry_auth' => $registryAuth]);
+            DB::table('sync_crypto_states')->where('user_id', $userId)->update(['revision' => $state->revision + 1, 'registry_auth' => $registryAuth, 'registry_auth_version' => $registryAuthVersion]);
 
             return $this->format($this->state($userId));
         }, 5);
@@ -410,11 +418,12 @@ class SyncNativeCryptoService
         DB::table('sync_server_recovery')->where('user_id', $userId)->delete();
         DB::table('sync_key_rotations')->where('user_id', $userId)->delete();
         DB::table('sync_history_id_migrations')->where('user_id', $userId)->delete();
+        DB::table('sync_controls')->where('user_id', $userId)->delete();
         DB::table('sync_native_keys')->where('user_id', $userId)->delete();
         DB::table('sync_crypto_states')->where('user_id', $userId)->update([
             'epoch' => (string) Str::uuid(), 'revision' => 0, 'active_key_id' => null,
             'legacy_frozen' => false, 'legacy_fingerprint' => null,
-            'identity_key_id' => null, 'identity_bundle' => null, 'registry_auth' => null,
+            'identity_key_id' => null, 'identity_bundle' => null, 'registry_auth' => null, 'registry_auth_version' => 1,
         ]);
     }
 
@@ -467,6 +476,16 @@ class SyncNativeCryptoService
         $this->envelope->validateBundle($key['key_id'], $key['encrypted_bundle']);
     }
 
+    private function requireRegistryVersion(?object $state, int $version): void
+    {
+        if (! in_array($version, [1, 2], true)) {
+            throw new SyncProtocolException('unsupported_registry_auth_version', 422);
+        }
+        if ($state && $version < $state->registry_auth_version) {
+            throw new SyncProtocolException('registry_auth_downgrade', 409);
+        }
+    }
+
     private function validateRegistryAuth(string $value): void
     {
         if (! preg_match('/^[0-9a-f]{64}$/D', $value)) {
@@ -485,7 +504,7 @@ class SyncNativeCryptoService
             'crypto_state_version' => 1, 'epoch' => $state->epoch, 'revision' => (string) $state->revision,
             'mode' => $state->native_enabled ? 'native' : 'legacy', 'active_key_id' => $state->active_key_id,
             'custody' => $state->custody,
-            'registry_auth' => $state->registry_auth,
+            'registry_auth' => $state->registry_auth, 'registry_auth_version' => (int) $state->registry_auth_version,
             'identity_key' => $state->identity_key_id === null ? null : [
                 'key_id' => $state->identity_key_id, 'encrypted_bundle' => $state->identity_bundle,
             ],

@@ -22,7 +22,7 @@ class BrowserSyncController extends Controller
             'redirect_uri' => ['required', 'string', 'max:100'],
         ]);
         abort_unless($this->validRedirect($data['redirect_uri']), 422);
-        $request->session()->put(self::SESSION_KEY, $data + ['expires_at' => now()->addMinutes(3)->timestamp]);
+        $request->session()->put(self::SESSION_KEY, $data + ['expires_at' => now()->addMinutes(10)->timestamp]);
 
         return redirect()->route(Auth::check() ? 'auth.desktop.confirm' : 'auth.redirect')
             ->header('Cache-Control', 'no-store');
@@ -30,7 +30,9 @@ class BrowserSyncController extends Controller
 
     public function confirm(Request $request): Response
     {
-        abort_unless($this->pending($request), 410);
+        if (! $this->pending($request)) {
+            return $this->expired();
+        }
         abort_unless(Auth::check(), 401);
 
         return response()->view('auth.desktop')->header('Cache-Control', 'no-store');
@@ -39,13 +41,21 @@ class BrowserSyncController extends Controller
     public function approve(Request $request, SyncBrowserAuthorizationService $authorization)
     {
         $pending = $this->pending($request);
-        abort_unless($pending && Auth::check(), 410);
+        if (! $pending) {
+            return $this->expired();
+        }
+        abort_unless(Auth::check(), 401);
         $code = $authorization->issue($request->user(), $pending['code_challenge']);
         $request->session()->forget(self::SESSION_KEY);
         $query = http_build_query(['state' => $pending['state'], 'code' => $code], '', '&', PHP_QUERY_RFC3986);
 
         return Redirect::away($pending['redirect_uri'].'?'.$query)
             ->header('Cache-Control', 'no-store');
+    }
+
+    private function expired(): Response
+    {
+        return response()->view('auth.desktop-expired', [], 410)->header('Cache-Control', 'no-store');
     }
 
     private function pending(Request $request): ?array

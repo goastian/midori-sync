@@ -19,6 +19,8 @@ class CollectionSeeder extends Seeder
             ['name' => 'devices', 'description' => 'Connected device metadata'],
             ['name' => 'passwords', 'description' => 'Encrypted password entries'],
             ['name' => 'credit-cards', 'description' => 'Encrypted payment card entries'],
+            ['name' => 'form-history', 'description' => 'Encrypted form field history'],
+            ['name' => 'addresses', 'description' => 'Encrypted autofill address entries'],
         ];
 
         DB::table('collections')->upsert($collections, ['name'], ['description']);

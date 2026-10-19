@@ -2,7 +2,9 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Record;
 use App\Models\User;
+use App\Services\SyncChangeJournal;
 use App\Services\SyncIdentityService;
 use App\Services\SyncPairingService;
 use Illuminate\Console\Command;
@@ -12,7 +14,7 @@ use Illuminate\Support\Str;
 
 class SyncTestAccount extends Command
 {
-    protected $signature = 'sync:test-account {--output=/tmp/midori-sync-h1-fixture.json} {--base-url=http://127.0.0.1:8000} {--fresh}';
+    protected $signature = 'sync:test-account {--output=/tmp/midori-sync-h1-fixture.json} {--base-url=http://127.0.0.1:8000} {--fresh} {--seed-legacy-deletion}';
 
     protected $description = 'Create or renew pairing codes for an isolated synthetic account on an existing local Sync instance';
 
@@ -32,6 +34,9 @@ class SyncTestAccount extends Command
             throw new \RuntimeException('The running backend does not match this checkout and configured issuer.');
         }
         $saved = ! $this->option('fresh') && is_file($path) ? json_decode(file_get_contents($path), true, 32, JSON_THROW_ON_ERROR) : null;
+        if ($this->option('seed-legacy-deletion') && ($saved === null || (fileperms($path) & 0777) !== 0600)) {
+            throw new \RuntimeException('Legacy deletion seeding requires an existing private synthetic fixture; never combine it with --fresh.');
+        }
         $fixture = DB::transaction(function () use ($saved, $base, $issuer, $pairing) {
             if ($saved !== null) {
                 if (($saved['kind'] ?? null) !== 'h1-live' || ($saved['database'] ?? null) !== DB::connection()->getDatabaseName() ||
@@ -45,6 +50,9 @@ class SyncTestAccount extends Command
                 $user = User::create(['authentik_id' => 'synthetic-h1:'.$id, 'authentik_issuer' => $issuer,
                     'email' => 'h1.'.$id.'@local.invalid', 'name' => 'Synthetic H1 integration',
                     'storage_quota_bytes' => (int) config('services.sync.default_quota')]);
+            }
+            if ($this->option('seed-legacy-deletion')) {
+                return array_replace($saved, ['legacyDeletion' => $this->seedLegacyDeletion($user)]);
             }
             $profiles = [];
             foreach (['A', 'B', 'C', 'D'] as $name) {
@@ -79,9 +87,34 @@ class SyncTestAccount extends Command
                 unlink($temporary);
             }
         }
-        $this->info('Synthetic account fixture saved privately to '.$path.'; pairing expires in '.config('services.sync.pairing_ttl').' seconds.');
+        $this->info('Synthetic account fixture saved privately to '.$path.($this->option('seed-legacy-deletion')
+            ? '; legacy deletion seeded without renewing pairing codes.'
+            : '; pairing expires in '.config('services.sync.pairing_ttl').' seconds.'));
         $this->line('Runtime: '.app()->environment().'; database: '.DB::connection()->getDatabaseName().'; backend: '.$base);
 
         return self::SUCCESS;
+    }
+
+    private function seedLegacyDeletion(User $user): array
+    {
+        $state = DB::table('sync_crypto_states')->where('user_id', $user->id)->first();
+        if (! $state || ! $state->native_enabled || $state->custody !== 'client' || $state->active_key_id === null ||
+            DB::table('sync_key_rotations')->where('user_id', $user->id)->exists()) {
+            throw new \RuntimeException('Seed only after synthetic activation and before its first rotation.');
+        }
+        $collectionId = DB::table('collections')->where('name', 'bookmarks')->value('id');
+        $journal = app(SyncChangeJournal::class);
+        $stream = $journal->prepare($user->id, $collectionId);
+        $record = Record::where('user_id', $user->id)->where('collection_id', $collectionId)->where('record_id', 'zzH1Legacy01_')->first();
+        if ($record && (! $record->deleted || $record->payload !== '' || $record->version !== 1)) {
+            throw new \RuntimeException('Synthetic legacy deletion conflicts with existing data.');
+        }
+        if (! $record) {
+            $record = Record::create(['user_id' => $user->id, 'collection_id' => $collectionId, 'record_id' => 'zzH1Legacy01_',
+                'payload' => '', 'deleted' => true, 'ttl' => null, 'version' => 1, 'modified_at' => microtime(true)]);
+            $journal->append($user->id, $collectionId, [$record]);
+        }
+
+        return ['collection' => 'bookmarks', 'id' => $record->record_id, 'generation' => $stream->generation, 'revision' => (string) $record->version];
     }
 }

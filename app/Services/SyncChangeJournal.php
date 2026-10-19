@@ -136,15 +136,57 @@ class SyncChangeJournal
         DB::table('sync_operations')->where('stream_id', $stream->id)->delete();
         DB::table('sync_changes')->where('stream_id', $stream->id)->delete();
         DB::table('sync_device_cursors')->where('stream_id', $stream->id)->delete();
+        DB::table('sync_compactions')->where('stream_id', $stream->id)->delete();
         $generation ??= (string) Str::uuid();
         DB::table('sync_streams')->where('id', $stream->id)->update([
             'generation' => $generation,
             'sequence' => 0,
             'reset_kind' => $kind,
             'reset_at_ms' => $atMs,
+            'control_revision' => 0, 'control' => null, 'compacted_through' => 0,
         ]);
 
         return $generation;
+    }
+
+    public function controlState(object $stream): array
+    {
+        return ['generation' => $stream->generation, 'control_revision' => (string) $stream->control_revision,
+            'control' => $stream->control === null ? null : json_decode($stream->control, true, flags: JSON_THROW_ON_ERROR)];
+    }
+
+    public function requireGeneration(object $stream, string $generation): void
+    {
+        if ($stream->generation !== $generation) {
+            throw new SyncProtocolException('reset_required', 409, $this->controlState($stream));
+        }
+    }
+
+    public function installControl(object $stream, array $control): void
+    {
+        $this->requireTransaction();
+        $history = $control['kind'] === 'history_clear';
+        $this->resetStream($stream, $history ? 'history_clear' : null, $history ? $control['clear_before_ms'] : null, $control['generation']);
+        DB::table('sync_streams')->where('id', $stream->id)->update([
+            'control_revision' => (int) $control['control_revision'],
+            'control' => json_encode($control, JSON_THROW_ON_ERROR),
+        ]);
+    }
+
+    public function compact(object $stream): array
+    {
+        $this->requireTransaction();
+        DB::table('sync_changes')->where('stream_id', $stream->id)->delete();
+        DB::table('sync_streams')->where('id', $stream->id)->update(['compacted_through' => $stream->sequence]);
+        $count = 0;
+        Record::forUser($stream->user_id)->inCollection($stream->collection_id)->chunkById(100, function ($records) use ($stream, &$count) {
+            $this->append($stream->user_id, $stream->collection_id, $records);
+            $count += $records->count();
+        });
+        $current = DB::table('sync_streams')->where('id', $stream->id)->first();
+
+        return ['generation' => $stream->generation, 'compacted_through' => (string) $stream->sequence,
+            'snapshot_sequence' => (string) $current->sequence, 'records' => $count];
     }
 
     public function changes(int $userId, int $collectionId, int $deviceId, ?string $cursor, int $limit, string $sessionId): array
@@ -160,6 +202,12 @@ class SyncChangeJournal
             $position = $cursor ? $this->decodeCursor($cursor, $stream, $deviceId) : null;
             $after = $position ? (int) $position['sequence'] : 0;
             $fence = (int) ($position['fence'] ?? $stream->sequence);
+            $floor = (int) $stream->compacted_through;
+            $rebased = $position !== null && ($after < $floor || (($position['fence'] ?? null) !== null && (int) $position['fence'] <= $floor));
+            if ($rebased || $position === null) {
+                $after = $floor;
+                $fence = (int) $stream->sequence;
+            }
             $changes = [];
             $bytes = 0;
 
@@ -186,10 +234,12 @@ class SyncChangeJournal
             $hasMore = $after < $fence;
 
             $result = [
-                'generation' => $stream->generation,
+                ...$this->controlState($stream),
                 'changes' => $changes,
                 'has_more' => $hasMore,
                 'snapshot_sequence' => (string) $fence,
+                'snapshot_rebased' => $rebased,
+                'compacted_through' => (string) $floor,
                 'next_cursor' => $this->encodeCursor($stream, $deviceId, $after, $hasMore ? $fence : null),
             ];
             if ($stream->reset_kind === 'history_clear') {
@@ -254,9 +304,7 @@ class SyncChangeJournal
             || ($value['device'] ?? null) !== (string) $deviceId) {
             throw new SyncProtocolException('invalid_cursor');
         }
-        if (($value['generation'] ?? null) !== $stream->generation) {
-            throw new SyncProtocolException('reset_required', 409);
-        }
+        $this->requireGeneration($stream, $value['generation'] ?? '');
 
         $sequence = $value['sequence'] ?? null;
         $fence = $value['fence'] ?? null;

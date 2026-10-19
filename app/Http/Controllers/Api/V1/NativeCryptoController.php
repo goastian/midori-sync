@@ -26,13 +26,14 @@ class NativeCryptoController extends Controller
             'revoke_incompatible' => ['sometimes', 'boolean'],
             'recovery_secret' => ['missing'],
             'custody' => ['sometimes', 'in:client'],
+            'registry_auth_version' => ['sometimes', 'integer', 'in:1,2'],
             'registry_auth' => ['required', 'string', 'regex:/^[0-9a-f]{64}$/D'],
         ]);
         $identityKey = $this->identityKey($request);
 
         return $this->response($this->crypto->activate(
             $request->user()->id, $context, $data['key_id'], $data['encrypted_bundle'], $request->boolean('revoke_incompatible'),
-            $identityKey, $options['registry_auth'],
+            $identityKey, $options['registry_auth'], (int) ($options['registry_auth_version'] ?? 1),
         ));
     }
 
@@ -52,6 +53,7 @@ class NativeCryptoController extends Controller
         $data = $request->validate([
             'operation_id' => ['required', 'uuid'],
             'recovery_secret' => ['missing'],
+            'registry_auth_version' => ['sometimes', 'integer', 'in:1,2'],
             'registry_auth' => ['required', 'string', 'regex:/^[0-9a-f]{64}$/D'],
             'keys' => ['required', 'array', 'list', 'min:2', 'max:8'],
             'keys.*' => ['required', 'array:key_id,encrypted_bundle'],
@@ -61,16 +63,17 @@ class NativeCryptoController extends Controller
         $bundle = $this->bundle($request);
 
         return $this->response($this->crypto->startRotation($request->user()->id, $context, $data['operation_id'],
-            $bundle['key_id'], $bundle['encrypted_bundle'], $data['keys'], $this->identityKey($request), $data['registry_auth']));
+            $bundle['key_id'], $bundle['encrypted_bundle'], $data['keys'], $this->identityKey($request), $data['registry_auth'], (int) ($data['registry_auth_version'] ?? 1)));
     }
 
     public function completeRotation(Request $request): JsonResponse
     {
         $context = $this->context($request);
         $data = $request->validate(['operation_id' => ['required', 'uuid'], 'recovery_secret' => ['missing'],
+            'registry_auth_version' => ['sometimes', 'integer', 'in:1,2'],
             'registry_auth' => ['required', 'string', 'regex:/^[0-9a-f]{64}$/D']]);
 
-        return $this->response($this->crypto->completeRotation($request->user()->id, $context, $data['operation_id'], $data['registry_auth']));
+        return $this->response($this->crypto->completeRotation($request->user()->id, $context, $data['operation_id'], $data['registry_auth'], (int) ($data['registry_auth_version'] ?? 1)));
     }
 
     public function rotationRecords(Request $request): JsonResponse
@@ -98,6 +101,8 @@ class NativeCryptoController extends Controller
             'source_id' => ['required', 'string', 'regex:/^h1:[0-9a-f]{64}$/D'],
             'source_revision' => ['required', 'string', 'regex:/^[1-9][0-9]{0,9}$/D'],
             'target_id' => ['required', 'string', 'regex:/^h2:[0-9a-f]{64}$/D'],
+            'target_revision' => ['sometimes', 'string', 'regex:/^(0|[1-9][0-9]{0,9})$/D'],
+            'target_deleted' => ['sometimes', 'boolean'],
             'target_ttl' => ['nullable', 'string', 'max:64', 'date'],
             'source_payload' => ['required', 'string'], 'target_payload' => ['required', 'string'],
         ]);
@@ -106,12 +111,25 @@ class NativeCryptoController extends Controller
             $request->input('sync_session')->device_id, $data + ['session_id' => $request->input('sync_session')->id]));
     }
 
+    public function historyTarget(Request $request, SyncStorageService $storage): JsonResponse
+    {
+        if (strlen($request->getContent()) > 8192) {
+            throw new SyncProtocolException('request_too_large', 413);
+        }
+        $data = $request->validate(['id' => ['required', 'string', 'regex:/^h2:[0-9a-f]{64}$/D'],
+            'generation' => ['required', 'uuid']]);
+
+        return $this->response($storage->historyMigrationTarget($request->user()->id,
+            $request->input('sync_session')->device_id, $request->input('sync_session')->id, $data['id'], $data['generation']));
+    }
+
     public function retire(Request $request, string $keyId): JsonResponse
     {
         $context = $this->context($request);
-        $data = $request->validate(['registry_auth' => ['required', 'string', 'regex:/^[0-9a-f]{64}$/D']]);
+        $data = $request->validate(['registry_auth_version' => ['sometimes', 'integer', 'in:1,2'],
+            'registry_auth' => ['required', 'string', 'regex:/^[0-9a-f]{64}$/D']]);
 
-        return $this->response($this->crypto->retireKey($request->user()->id, $context, $keyId, $data['registry_auth']));
+        return $this->response($this->crypto->retireKey($request->user()->id, $context, $keyId, $data['registry_auth'], (int) ($data['registry_auth_version'] ?? 1)));
     }
 
     public function rotate(Request $request): JsonResponse
@@ -130,9 +148,29 @@ class NativeCryptoController extends Controller
         return $this->response($this->crypto->rewrap($request->user()->id, $context, $keyId, $data['encrypted_bundle']));
     }
 
+    public function reset(Request $request, SyncStorageService $storage): JsonResponse
+    {
+        $context = $this->context($request);
+        $request->validate(['confirm' => ['required', 'accepted']]);
+        $state = $this->crypto->snapshot($request->user()->id, $context['session_id']);
+        if ($state['epoch'] !== $context['epoch'] || (string) $state['revision'] !== (string) $context['revision']) {
+            throw new SyncProtocolException('crypto_state_conflict', 409);
+        }
+        $storage->deleteAllUserData($request->user()->id, ownerRequest: true);
+
+        return $this->response($this->crypto->snapshot($request->user()->id, $context['session_id']));
+    }
+
     public function wipe(Request $request, SyncStorageService $storage): JsonResponse
     {
         $context = $this->context($request);
+        if ($request->has('controls')) {
+            $data = $request->validate(['operation_id' => ['required', 'uuid'],
+                'controls' => ['required', 'array', 'list', 'min:1', 'max:32'], 'controls.*' => ['required', 'array']]);
+
+            return $this->response($storage->applyAuthenticatedControls($request->user()->id,
+                $request->input('sync_session')->device_id, $data['operation_id'], $context, $data['controls'], true));
+        }
         $storage->deleteAllUserData($request->user()->id, $context);
 
         return response()->json(null, 204)->header('Cache-Control', 'no-store');
