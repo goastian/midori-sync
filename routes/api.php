@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\AccountController;
 use App\Http\Controllers\Api\V1\AuthTokenController;
 use App\Http\Controllers\Api\V1\BrowserSyncController;
 use App\Http\Controllers\Api\V1\DeviceController;
+use App\Http\Controllers\Api\V1\DeviceEnrollmentController;
 use App\Http\Controllers\Api\V1\NativeCryptoController;
 use App\Http\Controllers\Api\V1\NativeOidcController;
 use App\Http\Controllers\Api\V1\PairingController;
@@ -62,6 +63,15 @@ Route::prefix('v1')->middleware(SyncApiCors::class)->group(function () {
         Route::post('/crypto/rotation/history-target', [NativeCryptoController::class, 'historyTarget']);
         Route::put('/crypto/native-keys/{keyId}', [NativeCryptoController::class, 'rewrap']);
         Route::delete('/crypto/native-keys/{keyId}', [NativeCryptoController::class, 'retire']);
+        Route::middleware('throttle:sync')->group(function () {
+            Route::post('/crypto/enrollments', [DeviceEnrollmentController::class, 'store']);
+            Route::get('/crypto/enrollments', [DeviceEnrollmentController::class, 'index']);
+            Route::get('/crypto/enrollments/{id}', [DeviceEnrollmentController::class, 'show']);
+            Route::post('/crypto/enrollments/{id}/approve', [DeviceEnrollmentController::class, 'approve']);
+            Route::post('/crypto/enrollments/{id}/deny', [DeviceEnrollmentController::class, 'deny']);
+            Route::delete('/crypto/enrollments/{id}', [DeviceEnrollmentController::class, 'destroy']);
+        });
+        Route::post('/crypto/reset', [NativeCryptoController::class, 'reset'])->middleware('throttle:sync');
         Route::delete('/sync/data', [NativeCryptoController::class, 'wipe']);
     });
 });
