@@ -1,0 +1,23 @@
+name: Desktop shared contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      desktop_sha:
+        description: Full commit SHA in goastian/midori-desktop
+        required: true
+        type: string
+      backend_sha:
+        description: Full commit SHA in goastian/midori-sync
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    uses: goastian/midori-desktop/.github/workflows/sync-contract.yml@main
+    with:
+      desktop_sha: ${{ inputs.desktop_sha }}
+      backend_sha: ${{ inputs.backend_sha }}

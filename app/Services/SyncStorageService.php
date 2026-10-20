@@ -37,6 +37,7 @@ class SyncStorageService
         'credit-cards' => 'Encrypted payment card entries',
         'form-history' => 'Encrypted form field history',
         'addresses' => 'Encrypted autofill address entries',
+        'workspaces' => 'Encrypted workspace names and icons',
     ];
 
     public function getRecords(
@@ -87,14 +88,14 @@ class SyncStorageService
         return $record ? $this->formatRecord($record) : null;
     }
 
-    public function getChanges(int $userId, string $collectionName, int $deviceId, ?string $cursor, int $limit, string $sessionId): array
+    public function getChanges(int $userId, string $collectionName, int $deviceId, ?string $cursor, int $limit, string $sessionId, int $maxBytes = SyncChangeJournal::MAX_PAGE_BYTES): array
     {
         $collection = $this->resolveCollection($collectionName);
         if (! $collection) {
             throw new SyncProtocolException('unknown_collection', 404);
         }
 
-        return $this->journal->changes($userId, $collection->id, $deviceId, $cursor, $limit, $sessionId);
+        return $this->journal->changes($userId, $collection->id, $deviceId, $cursor, $limit, $sessionId, $maxBytes);
     }
 
     public function acknowledgeChanges(int $userId, string $collectionName, int $deviceId, string $cursor, string $sessionId): array
@@ -821,12 +822,10 @@ class SyncStorageService
     {
         DB::transaction(function () use ($userId, $cryptoContext, $ownerRequest) {
             $this->journal->lockUser($userId);
-            if (! $ownerRequest) {
-                if ($cryptoContext !== null) {
-                    $this->crypto->authorizeReset($userId, $cryptoContext);
-                } else {
-                    $this->crypto->requireLegacyWriter($userId);
-                }
+            if ($cryptoContext !== null) {
+                $this->crypto->authorizeReset($userId, $cryptoContext, $ownerRequest);
+            } elseif (! $ownerRequest) {
+                $this->crypto->requireLegacyWriter($userId);
             }
             Record::where('user_id', $userId)->delete();
             UserCollection::where('user_id', $userId)->delete();

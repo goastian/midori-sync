@@ -6,7 +6,7 @@ use App\Exceptions\SyncProtocolException;
 
 class SyncNativeEnvelope
 {
-    public const COLLECTIONS = ['bookmarks', 'history', 'tabs', 'browser-settings', 'midori-tab', 'midori-privacy', 'devices', 'passwords', 'credit-cards', 'form-history', 'addresses'];
+    public const COLLECTIONS = ['bookmarks', 'history', 'tabs', 'browser-settings', 'midori-tab', 'midori-privacy', 'devices', 'passwords', 'credit-cards', 'form-history', 'addresses', 'workspaces'];
 
     /**
      * Highest client plaintext schema generation each collection documents. The server only stores
@@ -14,7 +14,7 @@ class SyncNativeEnvelope
      */
     public const DATA_SCHEMAS = [
         'bookmarks' => 2, 'history' => 2, 'tabs' => 2, 'browser-settings' => 1, 'passwords' => 1,
-        'credit-cards' => 1, 'form-history' => 1, 'addresses' => 1,
+        'credit-cards' => 1, 'form-history' => 1, 'addresses' => 1, 'workspaces' => 1,
     ];
 
     public function supportsCollection(string $name): bool
@@ -69,6 +69,25 @@ class SyncNativeEnvelope
 
         return $this->validRecord($operation, $context['collection'], $context['generation'], $value['key_id'], $context['schema_version'])
             ? $value['key_id'] : null;
+    }
+
+    public function validatePasswordCapsule(array $capsule, string $epoch): void
+    {
+        if (! $this->fields($capsule, ['version', 'key', 'payload']) || $capsule['version'] !== 1 ||
+            ! $this->fields($capsule['key'], ['key_id', 'encrypted_bundle']) ||
+            ! is_string($capsule['key']['key_id']) || ! is_string($capsule['key']['encrypted_bundle']) || ! is_string($capsule['payload'])) {
+            throw new SyncProtocolException('invalid_password_capsule', 422);
+        }
+        $this->validateBundle($capsule['key']['key_id'], $capsule['key']['encrypted_bundle']);
+        $value = $this->decode($capsule['payload'], 49152);
+        if (! $this->fields($value, ['crypto_version', 'key_id', 'purpose', 'context', 'nonce', 'ciphertext']) ||
+            $value['crypto_version'] !== 2 || $value['key_id'] !== $capsule['key']['key_id'] || $value['purpose'] !== 'local' ||
+            ! $this->fields($value['context'], ['collection', 'id', 'generation', 'schema_version', 'base_revision']) ||
+            $value['context']['collection'] !== 'browser-settings' || $value['context']['id'] !== 'sync-password-backup-v1' ||
+            $value['context']['generation'] !== $epoch || $value['context']['schema_version'] !== 1 || $value['context']['base_revision'] !== '0' ||
+            ! $this->base64($value['nonce'], 24, 24) || ! $this->base64($value['ciphertext'], 16, 32784)) {
+            throw new SyncProtocolException('invalid_password_capsule', 422);
+        }
     }
 
     private function decode(string $value, int $maximum): mixed

@@ -152,11 +152,7 @@ class NativeCryptoController extends Controller
     {
         $context = $this->context($request);
         $request->validate(['confirm' => ['required', 'accepted']]);
-        $state = $this->crypto->snapshot($request->user()->id, $context['session_id']);
-        if ($state['epoch'] !== $context['epoch'] || (string) $state['revision'] !== (string) $context['revision']) {
-            throw new SyncProtocolException('crypto_state_conflict', 409);
-        }
-        $storage->deleteAllUserData($request->user()->id, ownerRequest: true);
+        $storage->deleteAllUserData($request->user()->id, $context, ownerRequest: true);
 
         return $this->response($this->crypto->snapshot($request->user()->id, $context['session_id']));
     }

@@ -45,14 +45,14 @@ class SyncChangesController extends Controller
             'operations_version' => 1,
             'crypto_state_version' => 1,
             'crypto_custody_version' => 1,
-            'crypto' => ['enrollment' => true, 'reset' => true],
+            'crypto' => ['enrollment' => true, 'reset' => true, 'password_unlock_version' => 1],
             'record_schema_versions' => [1, 2],
             'client_recovery' => ['version' => 1, 'rotation_version' => 1, 'registry_auth_version' => 2, 'authenticated_controls' => true,
                 'compaction_version' => 1, 'history_reconciliation_version' => 1],
             'crypto_versions' => [2],
             'collections' => SyncNativeEnvelope::COLLECTIONS,
             'features' => ['opaque_cursors', 'snapshot_fence', 'tombstones', 'device_acknowledgements', 'conditional_operations', 'idempotent_operations', 'credit_cards', 'form_history', 'addresses', 'journal_compaction', 'authenticated_controls',
-                'bookmark_labels', 'history_parts', 'history_visit_removals', 'tab_fragments'],
+                'bookmark_labels', 'history_parts', 'history_visit_removals', 'tab_fragments', 'change_page_byte_budget', 'workspace_metadata'],
             'data_schemas' => SyncNativeEnvelope::DATA_SCHEMAS,
             'limits' => [
                 'change_page_records' => SyncChangeJournal::MAX_PAGE_SIZE,
@@ -69,6 +69,7 @@ class SyncChangesController extends Controller
         $data = $request->validate([
             'cursor' => ['nullable', 'string', 'max:4096'],
             'limit' => ['sometimes', 'integer', 'min:1', 'max:'.SyncChangeJournal::MAX_PAGE_SIZE],
+            'max_bytes' => ['sometimes', 'integer', 'min:32768', 'max:'.SyncChangeJournal::MAX_PAGE_BYTES],
         ]);
 
         return response()->json($this->storage->getChanges(
@@ -78,6 +79,7 @@ class SyncChangesController extends Controller
             $data['cursor'] ?? null,
             (int) ($data['limit'] ?? SyncChangeJournal::MAX_PAGE_SIZE),
             $request->input('sync_session')->id,
+            (int) ($data['max_bytes'] ?? SyncChangeJournal::MAX_PAGE_BYTES),
         ))->header('Cache-Control', 'no-store');
     }
 

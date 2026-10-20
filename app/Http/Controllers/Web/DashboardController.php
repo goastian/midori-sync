@@ -18,6 +18,7 @@ class DashboardController extends Controller
         ['name' => 'browser-settings', 'label' => 'Preferences', 'browsable' => false],
         ['name' => 'form-history', 'label' => 'Form data', 'browsable' => false],
         ['name' => 'addresses', 'label' => 'Addresses', 'browsable' => false],
+        ['name' => 'workspaces', 'label' => 'Workspaces', 'browsable' => false],
     ];
 
     public function __invoke(Request $request)
