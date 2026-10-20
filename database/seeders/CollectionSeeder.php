@@ -21,6 +21,7 @@ class CollectionSeeder extends Seeder
             ['name' => 'credit-cards', 'description' => 'Encrypted payment card entries'],
             ['name' => 'form-history', 'description' => 'Encrypted form field history'],
             ['name' => 'addresses', 'description' => 'Encrypted autofill address entries'],
+            ['name' => 'workspaces', 'description' => 'Encrypted workspace names and icons'],
         ];
 
         DB::table('collections')->upsert($collections, ['name'], ['description']);
