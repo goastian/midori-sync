@@ -6,7 +6,7 @@ use App\Exceptions\SyncProtocolException;
 
 class SyncNativeEnvelope
 {
-    public const COLLECTIONS = ['bookmarks', 'history', 'tabs', 'browser-settings', 'midori-tab', 'midori-privacy', 'devices', 'passwords', 'credit-cards', 'form-history', 'addresses', 'workspaces', 'site-permissions', 'extensions'];
+    public const COLLECTIONS = ['bookmarks', 'history', 'tabs', 'browser-settings', 'midori-tab', 'midori-privacy', 'devices', 'passwords', 'credit-cards', 'form-history', 'addresses', 'workspaces', 'site-permissions', 'extensions', 'extension-settings'];
 
     /**
      * Highest client plaintext schema generation each collection documents. The server only stores
@@ -14,7 +14,7 @@ class SyncNativeEnvelope
      */
     public const DATA_SCHEMAS = [
         'bookmarks' => 2, 'history' => 2, 'tabs' => 2, 'browser-settings' => 1, 'passwords' => 1,
-        'credit-cards' => 1, 'form-history' => 1, 'addresses' => 1, 'workspaces' => 1, 'midori-privacy' => 1, 'site-permissions' => 1, 'extensions' => 1,
+        'credit-cards' => 1, 'form-history' => 1, 'addresses' => 1, 'workspaces' => 1, 'midori-privacy' => 1, 'site-permissions' => 1, 'extensions' => 1, 'extension-settings' => 1,
     ];
 
     public function supportsCollection(string $name): bool

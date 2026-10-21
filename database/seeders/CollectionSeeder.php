@@ -24,6 +24,7 @@ class CollectionSeeder extends Seeder
             ['name' => 'workspaces', 'description' => 'Encrypted workspace names and icons'],
             ['name' => 'site-permissions', 'description' => 'Encrypted portable site blocks and exceptions'],
             ['name' => 'extensions', 'description' => 'Encrypted official extension catalog references'],
+            ['name' => 'extension-settings', 'description' => 'Encrypted extension storage.sync settings'],
         ];
 
         DB::table('collections')->upsert($collections, ['name'], ['description']);

@@ -52,7 +52,7 @@ class SyncChangesController extends Controller
             'crypto_versions' => [2],
             'collections' => SyncNativeEnvelope::COLLECTIONS,
             'features' => ['opaque_cursors', 'snapshot_fence', 'tombstones', 'device_acknowledgements', 'conditional_operations', 'idempotent_operations', 'credit_cards', 'form_history', 'addresses', 'journal_compaction', 'authenticated_controls',
-                'bookmark_labels', 'history_parts', 'history_visit_removals', 'tab_fragments', 'change_page_byte_budget', 'workspace_metadata', 'custom_filters', 'site_permissions', 'extension_catalog'],
+                'bookmark_labels', 'history_parts', 'history_visit_removals', 'tab_fragments', 'change_page_byte_budget', 'workspace_metadata', 'custom_filters', 'site_permissions', 'extension_catalog', 'extension_settings'],
             'data_schemas' => SyncNativeEnvelope::DATA_SCHEMAS,
             'limits' => [
                 'change_page_records' => SyncChangeJournal::MAX_PAGE_SIZE,
