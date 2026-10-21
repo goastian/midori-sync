@@ -75,6 +75,50 @@ class SyncNativeCryptoService
         throw new SyncProtocolException('server_recovery_disabled', 409);
     }
 
+    public function passwordBackup(int $userId, string $sessionId): array
+    {
+        return DB::transaction(function () use ($userId, $sessionId) {
+            $this->journal->lockUser($userId);
+            $this->requireSession($userId, $sessionId);
+            $state = $this->state($userId);
+            $backup = $this->currentPasswordBackup($state)->first();
+            if (! $backup) {
+                throw new SyncProtocolException('password_backup_unavailable', 409);
+            }
+
+            return ['epoch' => $state->epoch, 'capsule' => json_decode($backup->capsule, true, 16, JSON_THROW_ON_ERROR)];
+        }, 5);
+    }
+
+    public function savePasswordBackup(int $userId, array $context, array $capsule): void
+    {
+        $this->envelope->validatePasswordCapsule($capsule, $context['epoch']);
+        DB::transaction(function () use ($userId, $context, $capsule) {
+            $this->journal->lockUser($userId);
+            $state = $this->authorizeWrite($userId, $context);
+            if ($state->custody !== 'client' || ! $state->identity_key_id || ($this->rotationProgress($userId)['phase'] ?? null) === 'rewriting') {
+                throw new SyncProtocolException('password_backup_unavailable', 409);
+            }
+            DB::table('sync_password_backups')->updateOrInsert(['user_id' => $userId], [
+                'epoch' => $state->epoch, 'registry_fingerprint' => $this->passwordRegistryFingerprint($state),
+                'capsule' => json_encode($capsule, JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }, 5);
+    }
+
+    private function passwordRegistryFingerprint(object $state): string
+    {
+        $keys = DB::table('sync_native_keys')->where('user_id', $state->user_id)->orderBy('key_id')->pluck('key_id')->all();
+
+        return hash('sha256', json_encode([$state->active_key_id, $state->identity_key_id, $keys], JSON_THROW_ON_ERROR));
+    }
+
+    private function currentPasswordBackup(object $state): \Illuminate\Database\Query\Builder
+    {
+        return DB::table('sync_password_backups')->where('user_id', $state->user_id)->where('epoch', $state->epoch)
+            ->where('registry_fingerprint', $this->passwordRegistryFingerprint($state));
+    }
+
     public function escrow(int $userId, array $context, array $keys, string $recoverySecret): array
     {
         throw new SyncProtocolException('server_recovery_disabled', 409);
@@ -374,12 +418,12 @@ class SyncNativeCryptoService
         }
     }
 
-    public function authorizeReset(int $userId, array $context): void
+    public function authorizeReset(int $userId, array $context, bool $ownerRequest = false): void
     {
         $this->requireTransaction();
         $this->requireSession($userId, $context['session_id']);
         $this->requireRevision($this->state($userId), $context);
-        if ($this->state($userId)->custody !== 'server') {
+        if (! $ownerRequest && $this->state($userId)->custody !== 'server') {
             throw new SyncProtocolException('authenticated_control_required', 409);
         }
     }
@@ -420,6 +464,8 @@ class SyncNativeCryptoService
         DB::table('sync_history_id_migrations')->where('user_id', $userId)->delete();
         DB::table('sync_controls')->where('user_id', $userId)->delete();
         DB::table('sync_native_keys')->where('user_id', $userId)->delete();
+        DB::table('sync_device_enrollments')->where('user_id', $userId)->delete();
+        DB::table('sync_password_backups')->where('user_id', $userId)->delete();
         DB::table('sync_crypto_states')->where('user_id', $userId)->update([
             'epoch' => (string) Str::uuid(), 'revision' => 0, 'active_key_id' => null,
             'legacy_frozen' => false, 'legacy_fingerprint' => null,
@@ -504,6 +550,7 @@ class SyncNativeCryptoService
             'crypto_state_version' => 1, 'epoch' => $state->epoch, 'revision' => (string) $state->revision,
             'mode' => $state->native_enabled ? 'native' : 'legacy', 'active_key_id' => $state->active_key_id,
             'custody' => $state->custody,
+            'password_unlock' => $this->currentPasswordBackup($state)->exists(),
             'registry_auth' => $state->registry_auth, 'registry_auth_version' => (int) $state->registry_auth_version,
             'identity_key' => $state->identity_key_id === null ? null : [
                 'key_id' => $state->identity_key_id, 'encrypted_bundle' => $state->identity_bundle,

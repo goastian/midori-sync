@@ -189,13 +189,16 @@ class SyncChangeJournal
             'snapshot_sequence' => (string) $current->sequence, 'records' => $count];
     }
 
-    public function changes(int $userId, int $collectionId, int $deviceId, ?string $cursor, int $limit, string $sessionId): array
+    public function changes(int $userId, int $collectionId, int $deviceId, ?string $cursor, int $limit, string $sessionId, int $maxBytes = self::MAX_PAGE_BYTES): array
     {
         if ($limit < 1 || $limit > self::MAX_PAGE_SIZE) {
             throw new SyncProtocolException('invalid_page_size');
         }
+        if ($maxBytes < 32768 || $maxBytes > self::MAX_PAGE_BYTES) {
+            throw new SyncProtocolException('invalid_page_bytes');
+        }
 
-        return DB::transaction(function () use ($userId, $collectionId, $deviceId, $cursor, $limit, $sessionId) {
+        return DB::transaction(function () use ($userId, $collectionId, $deviceId, $cursor, $limit, $sessionId, $maxBytes) {
             $this->lockUser($userId);
             $this->requireSession($userId, $sessionId, $deviceId);
             $stream = $this->prepare($userId, $collectionId);
@@ -209,24 +212,25 @@ class SyncChangeJournal
                 $fence = (int) $stream->sequence;
             }
             $changes = [];
-            $bytes = 0;
+            $bytes = 16384;
 
             $rows = DB::table('sync_changes')->where('stream_id', $stream->id)
                 ->where('sequence', '>', $after)->where('sequence', '<=', $fence)
                 ->orderBy('sequence')->limit($limit)->cursor();
 
             foreach ($rows as $row) {
-                $size = strlen($row->record);
-                if ($size > self::MAX_PAGE_BYTES) {
-                    throw new SyncProtocolException('record_too_large', 413);
-                }
-                if ($changes !== [] && $bytes + $size > self::MAX_PAGE_BYTES) {
-                    break;
-                }
-                $changes[] = [
+                $change = [
                     'sequence' => (string) $row->sequence,
                     'record' => json_decode($row->record, true, flags: JSON_THROW_ON_ERROR),
                 ];
+                $size = strlen(json_encode($change, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_THROW_ON_ERROR)) + 1;
+                if ($size + 16384 > $maxBytes) {
+                    throw new SyncProtocolException('record_too_large', 413);
+                }
+                if ($changes !== [] && $bytes + $size > $maxBytes) {
+                    break;
+                }
+                $changes[] = $change;
                 $bytes += $size;
                 $after = (int) $row->sequence;
             }

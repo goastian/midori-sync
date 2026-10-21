@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\V1\PairingController;
 use App\Http\Controllers\Api\V1\RefreshSessionController;
 use App\Http\Controllers\Api\V1\SyncChangesController;
 use App\Http\Controllers\Api\V1\SyncNotificationController;
+use App\Http\Controllers\Api\V1\SyncPasswordController;
 use App\Http\Middleware\SyncApiCors;
 use App\Http\Middleware\TrackDevice;
 use App\Http\Middleware\ValidateSyncToken;
@@ -51,6 +52,8 @@ Route::prefix('v1')->middleware(SyncApiCors::class)->group(function () {
 
         // Crypto key bundle
         Route::get('/crypto/state', [NativeCryptoController::class, 'show']);
+        Route::get('/crypto/password', [SyncPasswordController::class, 'show'])->middleware('throttle:sync');
+        Route::put('/crypto/password', [SyncPasswordController::class, 'store'])->middleware('throttle:sync');
         Route::get('/crypto/recovery', [NativeCryptoController::class, 'recovery'])->middleware('throttle:sync');
         Route::post('/crypto/recovery', [NativeCryptoController::class, 'escrow'])->middleware('throttle:sync');
         Route::post('/crypto/activate', [NativeCryptoController::class, 'activate']);

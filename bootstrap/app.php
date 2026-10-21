@@ -3,6 +3,8 @@
 use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\NegotiateCompression;
 use App\Http\Middleware\SecurityHeaders;
+use App\Http\Middleware\SyncApiCors;
+use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -16,6 +18,7 @@ $app = Application::configure(basePath: dirname(__DIR__))
         apiPrefix: 'api',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->prependToPriorityList(AuthenticatesRequests::class, SyncApiCors::class);
         $middleware->redirectGuestsTo(fn () => app()->environment(['local', 'testing'])
             && config('services.sync.local_dev') === true && getenv('MIDORI_SYNC_DEV_ENV_DIR')
                 ? '/' : '/auth/redirect');

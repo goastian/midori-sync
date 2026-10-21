@@ -22,6 +22,8 @@ class CollectionSeeder extends Seeder
             ['name' => 'form-history', 'description' => 'Encrypted form field history'],
             ['name' => 'addresses', 'description' => 'Encrypted autofill address entries'],
             ['name' => 'workspaces', 'description' => 'Encrypted workspace names and icons'],
+            ['name' => 'site-permissions', 'description' => 'Encrypted portable site blocks and exceptions'],
+            ['name' => 'extensions', 'description' => 'Encrypted official extension catalog references'],
         ];
 
         DB::table('collections')->upsert($collections, ['name'], ['description']);
