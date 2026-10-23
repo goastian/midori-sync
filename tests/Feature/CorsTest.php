@@ -61,6 +61,22 @@ class CorsTest extends TestCase
         );
     }
 
+    public function test_authentication_failures_keep_the_allowed_pattern_origin(): void
+    {
+        $this->withHeaders(['Origin' => 'https://client-abc123.example.com'])
+            ->getJson('/api/v1/devices')->assertUnauthorized()
+            ->assertHeader('Access-Control-Allow-Origin', 'https://client-abc123.example.com');
+    }
+
+    public function test_throttled_authentication_failures_keep_the_allowed_pattern_origin(): void
+    {
+        config(['services.sync.unauth_rate_limit' => 1]);
+        $this->withHeaders(['Origin' => 'https://client-abc123.example.com'])
+            ->getJson('/api/v1/devices')->assertUnauthorized();
+        $this->getJson('/api/v1/devices')->assertStatus(429)
+            ->assertHeader('Access-Control-Allow-Origin', 'https://client-abc123.example.com');
+    }
+
     public function test_disallowed_origin_gets_no_cors_headers(): void
     {
         $user = User::factory()->create();

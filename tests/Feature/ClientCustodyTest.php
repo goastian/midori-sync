@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Exceptions\SyncProtocolException;
 use App\Models\Record;
 use App\Models\User;
 use App\Services\SyncNativeEnvelope;
@@ -60,6 +61,73 @@ class ClientCustodyTest extends TestCase
     private function activate(): array
     {
         return $this->postJson('/api/v1/crypto/activate', $this->activation())->assertOk()->json();
+    }
+
+    private function passwordCapsule(array $state): array
+    {
+        $key = $this->key(99);
+
+        return ['version' => 1, 'key' => $key, 'payload' => json_encode([
+            'crypto_version' => 2, 'key_id' => $key['key_id'], 'purpose' => 'local',
+            'context' => ['collection' => 'browser-settings', 'id' => 'sync-password-backup-v1',
+                'generation' => $state['epoch'], 'schema_version' => 1, 'base_revision' => '0'],
+            'nonce' => base64_encode(str_repeat('n', 24)), 'ciphertext' => base64_encode(str_repeat('c', 128)),
+        ], JSON_THROW_ON_ERROR)];
+    }
+
+    public function test_password_backup_is_account_scoped_ciphertext_and_does_not_rewrite_the_registry(): void
+    {
+        $state = $this->activate();
+        $this->assertFalse($state['password_unlock']);
+        $capsule = $this->passwordCapsule($state);
+        $body = ['crypto' => $this->context($state), 'capsule' => $capsule];
+        $this->putJson('/api/v1/crypto/password', $body)->assertNoContent();
+        $this->assertSame(array_replace($state, ['password_unlock' => true]), $this->state());
+        $this->getJson('/api/v1/crypto/password')->assertOk()->assertHeader('Cache-Control', 'no-store, private')
+            ->assertExactJson(['epoch' => $state['epoch'], 'capsule' => $capsule]);
+        $second = $this->createNativeSessionToken($this->user);
+        $this->withToken($second['token'])->getJson('/api/v1/crypto/password')->assertOk()
+            ->assertJsonPath('capsule.key.key_id', $capsule['key']['key_id']);
+        $this->withToken($this->createNativeSessionToken(User::factory()->create())['token'])
+            ->getJson('/api/v1/crypto/password')->assertStatus(409)->assertJsonPath('error', 'password_backup_unavailable');
+        $this->withToken($second['token']);
+        $this->putJson('/api/v1/crypto/password', $body + ['password' => 'must never be sent'])->assertUnprocessable();
+        $this->putJson('/api/v1/crypto/password', array_replace($body, ['crypto' => ['epoch' => $state['epoch'], 'revision' => '0']]))
+            ->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
+        $this->assertDatabaseCount('sync_password_backups', 1);
+    }
+
+    public function test_password_capsules_reject_wrong_purpose_epoch_and_oversized_ciphertext(): void
+    {
+        $state = $this->activate();
+        foreach (['purpose', 'epoch', 'oversized'] as $fault) {
+            $capsule = $this->passwordCapsule($state);
+            $payload = json_decode($capsule['payload'], true, 16, JSON_THROW_ON_ERROR);
+            if ($fault === 'purpose') {
+                $payload['purpose'] = 'record';
+            } elseif ($fault === 'epoch') {
+                $payload['context']['generation'] = (string) Str::uuid();
+            } else {
+                $payload['ciphertext'] = base64_encode(str_repeat('c', 32785));
+            }
+            $capsule['payload'] = json_encode($payload, JSON_THROW_ON_ERROR);
+            $this->putJson('/api/v1/crypto/password', ['crypto' => $this->context($state), 'capsule' => $capsule])
+                ->assertUnprocessable()->assertJsonPath('error', 'invalid_password_capsule');
+        }
+        $this->assertDatabaseCount('sync_password_backups', 0);
+    }
+
+    public function test_key_rotation_invalidates_the_password_copy_and_reset_erases_it(): void
+    {
+        $state = $this->activate();
+        $this->putJson('/api/v1/crypto/password', ['crypto' => $this->context($state), 'capsule' => $this->passwordCapsule($state)])->assertNoContent();
+        $state = $this->postJson('/api/v1/crypto/rotation', $this->rotation($state))->assertOk()->json();
+        $this->assertFalse($state['password_unlock']);
+        $this->getJson('/api/v1/crypto/password')->assertStatus(409)->assertJsonPath('error', 'password_backup_unavailable');
+        $this->putJson('/api/v1/crypto/password', ['crypto' => $this->context($state), 'capsule' => $this->passwordCapsule($state)])
+            ->assertStatus(409)->assertJsonPath('error', 'password_backup_unavailable');
+        $this->postJson('/api/v1/crypto/reset', ['crypto' => $this->context($state), 'confirm' => true])->assertOk();
+        $this->assertDatabaseCount('sync_password_backups', 0);
     }
 
     private function legacy(): array
@@ -156,14 +224,15 @@ class ClientCustodyTest extends TestCase
         $this->assertSame(2, $this->state()['registry_auth_version']);
     }
 
-    public function test_form_history_and_addresses_use_independent_protected_streams(): void
+    public function test_autofill_workspaces_filters_and_permissions_use_independent_protected_streams(): void
     {
         $capabilities = $this->getJson('/api/v1/capabilities')->assertOk()->json();
         $state = $this->activate();
         $payloads = [];
-        foreach (['form-history' => 'form_history', 'addresses' => 'addresses'] as $collection => $feature) {
+        foreach (['form-history' => 'form_history', 'addresses' => 'addresses', 'workspaces' => 'workspace_metadata', 'midori-privacy' => 'custom_filters', 'site-permissions' => 'site_permissions', 'extensions' => 'extension_catalog', 'extension-settings' => 'extension_settings'] as $collection => $feature) {
             $this->assertContains($collection, $capabilities['collections']);
             $this->assertContains($feature, $capabilities['features']);
+            $this->assertSame(1, $capabilities['data_schemas'][$collection]);
             $url = '/api/v1/sync/collections/'.$collection;
             $body = $this->operation($state, 'same-record-id', collection: $collection);
             $this->postJson($url.'/operations', $body)->assertOk()->assertJsonPath('results.0.status', 'applied');
@@ -180,15 +249,91 @@ class ClientCustodyTest extends TestCase
             $payloads[] = $deleted['operations'][0]['payload'];
         }
         $this->assertNotSame($payloads[0], $payloads[1]);
-        $this->assertDatabaseCount('records', 2);
+        $this->assertCount(7, array_unique($payloads));
+        $this->assertDatabaseCount('records', 7);
         $other = User::factory()->create();
         $this->withToken($this->createNativeSessionToken($other)['token']);
-        foreach (['form-history', 'addresses'] as $collection) {
+        foreach (['form-history', 'addresses', 'workspaces', 'midori-privacy', 'site-permissions', 'extensions', 'extension-settings'] as $collection) {
             $this->getJson('/api/v1/sync/collections/'.$collection.'/changes')->assertOk()->assertJsonCount(0, 'changes');
         }
         $migration = require base_path('database/migrations/2026_10_15_000002_add_form_history_and_addresses.php');
         $this->expectException(\RuntimeException::class);
         $migration->down();
+    }
+
+    public function test_workspace_migration_can_only_remove_an_unused_collection(): void
+    {
+        $migration = require base_path('database/migrations/2026_10_19_000001_add_workspace_metadata_collection.php');
+        $migration->down();
+        $this->assertDatabaseMissing('collections', ['name' => 'workspaces']);
+        $migration->up();
+        $migration->up();
+        $this->assertSame(1, DB::table('collections')->where('name', 'workspaces')->count());
+        $this->getJson('/api/v1/sync/collections/workspaces/changes')->assertOk();
+        try {
+            $migration->down();
+            $this->fail('A workspace stream must survive a migration rollback.');
+        } catch (\RuntimeException $error) {
+            $this->assertSame('Workspace metadata collection cannot be removed after use.', $error->getMessage());
+        }
+        $this->assertDatabaseHas('collections', ['name' => 'workspaces']);
+    }
+
+    public function test_site_permissions_migration_preserves_existing_streams(): void
+    {
+        $migration = require database_path('migrations/2026_10_20_000001_add_site_permissions_collection.php');
+        $migration->down();
+        $this->assertDatabaseMissing('collections', ['name' => 'site-permissions']);
+        $migration->up();
+        $migration->up();
+        $this->assertSame(1, DB::table('collections')->where('name', 'site-permissions')->count());
+        $this->getJson('/api/v1/sync/collections/site-permissions/changes')->assertOk();
+        try {
+            $migration->down();
+            $this->fail('A permission stream must survive a migration rollback.');
+        } catch (\RuntimeException $error) {
+            $this->assertSame('Site permissions collection cannot be removed after use.', $error->getMessage());
+        }
+        $this->assertDatabaseHas('collections', ['name' => 'site-permissions']);
+        $this->assertDatabaseHas('collections', ['name' => 'midori-privacy']);
+    }
+
+    public function test_extensions_migration_preserves_existing_streams(): void
+    {
+        $migration = require database_path('migrations/2026_10_21_000001_add_extensions_collection.php');
+        $migration->down();
+        $this->assertDatabaseMissing('collections', ['name' => 'extensions']);
+        $migration->up();
+        $migration->up();
+        $this->assertSame(1, DB::table('collections')->where('name', 'extensions')->count());
+        $this->getJson('/api/v1/sync/collections/extensions/changes')->assertOk();
+        try {
+            $migration->down();
+            $this->fail('An extension stream must survive a migration rollback.');
+        } catch (\RuntimeException $error) {
+            $this->assertSame('Extension catalog collection cannot be removed after use.', $error->getMessage());
+        }
+        $this->assertDatabaseHas('collections', ['name' => 'extensions']);
+        $this->assertDatabaseHas('collections', ['name' => 'midori-privacy']);
+    }
+
+    public function test_extension_settings_migration_preserves_existing_streams(): void
+    {
+        $migration = require database_path('migrations/2026_10_21_000002_add_extension_settings_collection.php');
+        $migration->down();
+        $this->assertDatabaseMissing('collections', ['name' => 'extension-settings']);
+        $migration->up();
+        $migration->up();
+        $this->assertSame(1, DB::table('collections')->where('name', 'extension-settings')->count());
+        $this->getJson('/api/v1/sync/collections/extension-settings/changes')->assertOk();
+        try {
+            $migration->down();
+            $this->fail('An extension settings stream must survive a migration rollback.');
+        } catch (\RuntimeException $error) {
+            $this->assertSame('Extension settings collection cannot be removed after use.', $error->getMessage());
+        }
+        $this->assertDatabaseHas('collections', ['name' => 'extension-settings']);
+        $this->assertDatabaseHas('collections', ['name' => 'extensions']);
     }
 
     public function test_activation_never_accepts_a_recovery_secret_and_requires_separate_identity(): void
@@ -205,6 +350,39 @@ class ClientCustodyTest extends TestCase
         $this->getJson('/api/v1/crypto/recovery')->assertConflict()->assertJsonPath('error', 'server_recovery_disabled');
         $this->postJson('/api/v1/crypto/recovery', ['recovery_secret' => str_repeat('a', 64)])
             ->assertConflict()->assertJsonPath('error', 'server_recovery_disabled');
+    }
+
+    public function test_desktop_and_mobile_share_each_encrypted_collection_bidirectionally(): void
+    {
+        $state = $this->activate();
+        $desktop = $this->defaultHeaders['Authorization'];
+        $mobileDevice = $this->user->devices()->create([
+            'device_id' => (string) Str::uuid(), 'name' => 'Midori Mobile', 'type' => 'mobile',
+        ]);
+        $mobile = 'Bearer '.$this->createNativeSessionToken($this->user, $mobileDevice)['token'];
+        foreach (['bookmarks', 'history', 'passwords', 'credit-cards', 'form-history', 'addresses', 'workspaces', 'midori-privacy', 'site-permissions', 'extensions', 'extension-settings', 'tabs', 'browser-settings'] as $collection) {
+            $url = '/api/v1/sync/collections/'.$collection;
+            $this->withHeader('Authorization', $desktop);
+            $fromDesktop = $this->operation($state, 'desktop-record', collection: $collection);
+            $this->postJson($url.'/operations', $fromDesktop)->assertOk()->assertJsonPath('results.0.status', 'applied');
+            $this->withHeader('Authorization', $mobile);
+            $this->getJson($url.'/changes')->assertOk()
+                ->assertJsonPath('generation', $fromDesktop['generation'])
+                ->assertJsonPath('changes.0.record.payload', $fromDesktop['operations'][0]['payload']);
+            $fromMobile = $this->operation($state, 'mobile-record', collection: $collection);
+            $this->postJson($url.'/operations', $fromMobile)->assertOk()->assertJsonPath('results.0.status', 'applied');
+            $this->withHeader('Authorization', $desktop);
+            $page = $this->getJson($url.'/changes')->assertOk()->assertJsonCount(2, 'changes')
+                ->assertJsonPath('changes.1.record.payload', $fromMobile['operations'][0]['payload'])->json();
+            $desktopCursor = $page['next_cursor'];
+            $this->withHeader('Authorization', $mobile);
+            $deleted = $this->operation($state, 'desktop-record', '1', deleted: true, collection: $collection);
+            $this->postJson($url.'/operations', $deleted)->assertOk()->assertJsonPath('results.0.status', 'applied');
+            $this->withHeader('Authorization', $desktop);
+            $this->getJson($url.'/changes?'.http_build_query(['cursor' => $desktopCursor]))->assertOk()
+                ->assertJsonCount(1, 'changes')->assertJsonPath('changes.0.record.deleted', true)
+                ->assertJsonPath('changes.0.record.payload', $deleted['operations'][0]['payload']);
+        }
     }
 
     public function test_legacy_escrow_is_preserved_but_never_disclosed_by_session_or_migration_headers(): void
@@ -664,5 +842,44 @@ class ClientCustodyTest extends TestCase
         $this->assertDatabaseCount('sync_history_id_migrations', 1);
         $body['crypto']['epoch'] = (string) Str::uuid();
         $this->postJson('/api/v1/crypto/rotation/history-id', $body)->assertConflict()->assertJsonPath('error', 'crypto_state_conflict');
+    }
+
+    public function test_a_session_can_reset_unrecoverable_client_keys_and_start_fresh(): void
+    {
+        $state = $this->activate();
+        $this->postJson('/api/v1/crypto/reset', ['crypto' => ['epoch' => $state['epoch'], 'revision' => '0'], 'confirm' => true])
+            ->assertStatus(409)->assertJsonPath('error', 'crypto_state_conflict');
+        $this->postJson('/api/v1/crypto/reset', ['crypto' => $this->context($state)])->assertUnprocessable();
+        $this->postJson('/api/v1/crypto/enrollments', ['public_key' => base64_encode("\x04".random_bytes(64))])->assertCreated();
+        $fresh = $this->postJson('/api/v1/crypto/reset', ['crypto' => $this->context($state), 'confirm' => true])->assertOk()->json();
+        $this->assertDatabaseCount('sync_device_enrollments', 0);
+        $this->assertNotSame($state['epoch'], $fresh['epoch']);
+        $this->assertSame([], $fresh['keys']);
+        $this->assertNull($fresh['active_key_id']);
+        $this->postJson('/api/v1/crypto/activate', $this->activation())->assertOk();
+    }
+
+    public function test_owner_reset_checks_revision_and_session_inside_the_storage_transaction(): void
+    {
+        $state = $this->activate();
+        $session = DB::table('sync_sessions')->where('user_id', $this->user->id)->first();
+        $context = $this->context($state) + ['session_id' => $session->id];
+        DB::table('sync_crypto_states')->where('user_id', $this->user->id)->increment('revision');
+        try {
+            app(SyncStorageService::class)->deleteAllUserData($this->user->id, $context, ownerRequest: true);
+            $this->fail('A stale reset must not erase newer keys');
+        } catch (SyncProtocolException $error) {
+            $this->assertSame('crypto_state_conflict', $error->error);
+        }
+        $this->assertDatabaseCount('sync_native_keys', 1);
+        $context['revision'] = (string) ((int) $context['revision'] + 1);
+        DB::table('sync_sessions')->where('id', $session->id)->delete();
+        try {
+            app(SyncStorageService::class)->deleteAllUserData($this->user->id, $context, ownerRequest: true);
+            $this->fail('A revoked session must not erase encrypted data');
+        } catch (SyncProtocolException $error) {
+            $this->assertSame('auth_required', $error->error);
+        }
+        $this->assertDatabaseCount('sync_native_keys', 1);
     }
 }

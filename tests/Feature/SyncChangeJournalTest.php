@@ -41,8 +41,12 @@ class SyncChangeJournalTest extends TestCase
 
     public function test_capabilities_are_public_but_do_not_claim_the_native_client_is_ready(): void
     {
-        $this->getJson('/api/v1/capabilities')->assertOk()
-            ->assertJsonPath('protocol', 'MSP')->assertJsonPath('native_ready', false);
+        $response = $this->getJson('/api/v1/capabilities')->assertOk()
+            ->assertJsonPath('protocol', 'MSP')->assertJsonPath('native_ready', false)
+            ->assertJsonPath('data_schemas.midori-privacy', 1)
+            ->assertJsonPath('data_schemas.site-permissions', 1);
+        $this->assertContains('custom_filters', $response->json('features'));
+        $this->assertContains('site_permissions', $response->json('features'));
         $this->getJson(self::FEED)->assertUnauthorized();
     }
 
@@ -87,6 +91,32 @@ class SyncChangeJournalTest extends TestCase
             ->assertOk()->assertJsonPath('acknowledged_sequence', '2');
         $this->withToken($this->token)->postJson(self::ACK, ['cursor' => $first['next_cursor']])
             ->assertOk()->assertJsonPath('acknowledged_sequence', '2');
+    }
+
+    public function test_client_byte_budget_preserves_the_snapshot_and_counts_json_escaping(): void
+    {
+        for ($i = 0; $i < 6; $i++) {
+            $this->writeRecord('record-'.$i, str_repeat('é<>&', 600));
+        }
+        $cursor = null;
+        $sequences = [];
+        do {
+            $query = ['max_bytes' => 32768, 'limit' => 100];
+            if ($cursor !== null) {
+                $query['cursor'] = $cursor;
+            }
+            $response = $this->withToken($this->token)->getJson(self::FEED.'?'.http_build_query($query))->assertOk();
+            $this->assertLessThanOrEqual(32768, strlen($response->getContent()));
+            $page = $response->json();
+            $this->assertSame('6', $page['snapshot_sequence']);
+            $sequences = [...$sequences, ...array_column($page['changes'], 'sequence')];
+            $cursor = $page['next_cursor'];
+        } while ($page['has_more']);
+        $this->assertSame(['1', '2', '3', '4', '5', '6'], $sequences);
+        $this->assertSame([], $this->page($cursor)['changes']);
+        foreach ([0, 32767, 4194305] as $maxBytes) {
+            $this->getJson(self::FEED.'?max_bytes='.$maxBytes)->assertUnprocessable();
+        }
     }
 
     public function test_legacy_records_are_bootstrapped_once_before_the_first_mutation(): void

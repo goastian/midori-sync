@@ -38,6 +38,7 @@ class WebDashboardTest extends TestCase
         $this->seedRecords($user, 'bookmarks', 3, 2);
         $this->seedRecords($user, 'credit-cards', 4);
         $this->seedRecords($user, 'passwords', 5);
+        $this->seedRecords($user, 'workspaces', 2);
 
         $this->actingAs($user)->get('/dashboard')->assertOk()->assertInertia(function (AssertableInertia $page) {
             $page->component('Dashboard', false);
@@ -47,6 +48,9 @@ class WebDashboardTest extends TestCase
             $this->assertSame(5, $tiles['passwords']['count']);
             $this->assertFalse($tiles['passwords']['browsable']);
             $this->assertNull($tiles['passwords']['href']);
+            $this->assertSame(2, $tiles['workspaces']['count']);
+            $this->assertFalse($tiles['workspaces']['browsable']);
+            $this->assertNull($tiles['workspaces']['href']);
             $this->assertFalse($tiles->has('credit-cards'));
             $this->assertSame('/devices', $tiles['devices']['href']);
         });

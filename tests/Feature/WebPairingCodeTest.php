@@ -16,10 +16,48 @@ class WebPairingCodeTest extends TestCase
 {
     use RefreshDatabase;
 
+    private array $launcherEnvironment = [];
+
+    private string $launcherDirectory;
+
     protected function setUp(): void
     {
+        $this->launcherDirectory = sys_get_temp_dir().'/midori-sync-web-pairing-'.bin2hex(random_bytes(8));
+        mkdir($this->launcherDirectory, 0700);
+        $environmentFile = dirname(__DIR__, 2).'/.env';
+        if (is_file($environmentFile)) {
+            symlink($environmentFile, $this->launcherDirectory.'/.env');
+        } else {
+            touch($this->launcherDirectory.'/.env');
+            chmod($this->launcherDirectory.'/.env', 0600);
+        }
+        foreach (['SYNC_LOCAL_DEV' => 'true', 'MIDORI_SYNC_DEV_ENV_DIR' => $this->launcherDirectory] as $name => $value) {
+            $this->launcherEnvironment[$name] = [getenv($name), $_ENV[$name] ?? null, $_SERVER[$name] ?? null];
+            putenv("$name=$value");
+            $_ENV[$name] = $_SERVER[$name] = $value;
+        }
         parent::setUp();
         config(['services.sync.local_dev' => true]);
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            parent::tearDown();
+        } finally {
+            foreach ($this->launcherEnvironment as $name => [$process, $environment, $server]) {
+                putenv($process === false ? $name : "$name=$process");
+                unset($_ENV[$name], $_SERVER[$name]);
+                if ($environment !== null) {
+                    $_ENV[$name] = $environment;
+                }
+                if ($server !== null) {
+                    $_SERVER[$name] = $server;
+                }
+            }
+            unlink($this->launcherDirectory.'/.env');
+            rmdir($this->launcherDirectory);
+        }
     }
 
     public function test_devices_page_offers_a_code_only_in_local_development(): void

@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\Collection;
+use App\Models\User;
+use App\Services\SyncStorageService;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -22,5 +24,16 @@ class CollectionLookupTest extends TestCase
         $this->assertInstanceOf(Collection::class, $collection);
         $this->assertSame('bookmarks', $collection->name);
         $this->assertGreaterThan(0, $collection->id);
+    }
+
+    public function test_workspace_collection_is_available_without_seeded_rows(): void
+    {
+        Collection::where('name', 'workspaces')->delete();
+        Collection::forgetByName('workspaces');
+        $user = User::factory()->create();
+        $this->assertSame([], app(SyncStorageService::class)->getRecords($user->id, 'workspaces'));
+        $this->assertDatabaseHas('collections', [
+            'name' => 'workspaces', 'description' => 'Encrypted workspace names and icons',
+        ]);
     }
 }

@@ -55,4 +55,26 @@ class RateLimitTest extends TestCase
         $this->withToken($this->token)
             ->deleteJson('/api/v1/devices/not-found')->assertNotFound();
     }
+
+    public function test_accounts_on_the_same_ip_have_independent_read_budgets(): void
+    {
+        $other = User::factory()->create(['storage_quota_bytes' => 104857600]);
+        $otherToken = $this->createNativeSessionToken($other)['token'];
+        for ($i = 0; $i < 3; $i++) {
+            $this->withToken($this->token)->getJson('/api/v1/devices')->assertOk();
+        }
+        $this->withToken($otherToken)->getJson('/api/v1/devices')->assertOk();
+        $this->withToken($this->token)->getJson('/api/v1/devices')->assertStatus(429);
+    }
+
+    public function test_devices_of_one_account_share_its_budget_even_from_different_ips(): void
+    {
+        $secondToken = $this->createNativeSessionToken($this->user)['token'];
+        for ($i = 0; $i < 3; $i++) {
+            $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.10'])
+                ->withToken($this->token)->getJson('/api/v1/devices')->assertOk();
+        }
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.20'])
+            ->withToken($secondToken)->getJson('/api/v1/devices')->assertStatus(429);
+    }
 }
