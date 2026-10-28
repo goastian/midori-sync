@@ -39,6 +39,7 @@ RUN apk add --no-cache \
         php85-openssl \
         php85-pcntl \
         php85-pdo_pgsql \
+        php85-pgsql \
         php85-pecl-redis \
         php85-phar \
         php85-posix \
