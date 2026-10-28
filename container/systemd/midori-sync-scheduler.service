@@ -1,0 +1,13 @@
+[Unit]
+Description=Midori Sync — artisan schedule:run (sync:cleanup-expired, sync:recalculate-usage)
+After=default.target
+
+[Service]
+Type=oneshot
+# Corre en el host, no dentro del contenedor: "schedule:run"/"schedule:work"
+# necesitan proc_open para lanzar cada tarea como proceso aparte, y
+# proc_open está deshabilitado dentro del contenedor (disable_functions,
+# shell-less). Este timer reemplaza al antiguo "scheduler" de
+# supervisord, que crasheaba cada minuto por el mismo motivo.
+ExecStart=/usr/bin/podman exec midori-sync php artisan schedule:run
+TimeoutStartSec=120
