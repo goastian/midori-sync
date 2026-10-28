@@ -1,8 +1,9 @@
 <script setup>
-import { computed, nextTick, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { router } from '@inertiajs/vue3';
 import axios from 'axios';
 import AppLayout from '@/Layouts/AppLayout.vue';
+import QRCode from 'qrcode';
 
 defineProps({
     devices: Array,
@@ -14,6 +15,7 @@ const editingName = ref('');
 const editingError = ref('');
 const nameInput = ref(null);
 const pairingCode = ref('');
+const pairingQr = ref('');
 const secondsRemaining = ref(0);
 const pairingLoading = ref(false);
 const pairingError = ref('');
@@ -33,17 +35,24 @@ async function generatePairingCode() {
     pairingLoading.value = true;
     pairingError.value = '';
     pairingCode.value = '';
+    pairingQr.value = '';
     copied.value = false;
     stopPairingTimer();
     try {
         const { data } = await axios.post('/devices/pairing-code', {}, { withXSRFToken: true });
+        const pairingUrl = new URL('/pair', window.location.origin);
+        pairingUrl.hash = `token=${data.pairing_token}`;
+        const image = await QRCode.toDataURL(pairingUrl.href, { width: 280, margin: 4, errorCorrectionLevel: 'M' });
         pairingCode.value = data.pairing_token;
+        pairingQr.value = image;
         const expiresAt = Date.now() + data.expires_in * 1000;
         secondsRemaining.value = data.expires_in;
         pairingTimer = setInterval(() => {
             secondsRemaining.value = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
             if (secondsRemaining.value === 0) {
                 pairingCode.value = '';
+                pairingQr.value = '';
+                pairingError.value = 'This QR code expired. Show a new QR code to continue.';
                 stopPairingTimer();
             }
         }, 1000);
@@ -58,9 +67,9 @@ async function generatePairingCode() {
         } else if (reason === 'native_identity_required') {
             pairingError.value = 'This account does not have a valid native identity. Contact the Sync server administrator.';
         } else if (reason === 'identity_issuer_mismatch' || reason === 'invalid_account_identity') {
-            pairingError.value = 'This account cannot pair with Midori Desktop. Contact the Sync server administrator.';
+            pairingError.value = 'This account cannot connect to Midori Sync. Contact the Sync server administrator.';
         } else {
-            pairingError.value = 'Could not generate a code. Please try again.';
+            pairingError.value = 'Could not generate a QR code. Please try again.';
         }
     } finally {
         pairingLoading.value = false;
@@ -77,6 +86,9 @@ async function copyPairingCode() {
 }
 
 onUnmounted(stopPairingTimer);
+onMounted(() => {
+    if (new URLSearchParams(window.location.search).get('connect') === 'android') generatePairingCode();
+});
 
 function formatTime(ts) {
     if (!ts) return 'Never';
@@ -132,13 +144,14 @@ function saveEdit(device) {
         <h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-6">Devices</h1>
 
         <section class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6" aria-labelledby="pairing-heading">
-            <h2 id="pairing-heading" class="text-base font-semibold text-gray-900 dark:text-gray-100">Connect Midori Desktop</h2>
-            <p v-if="developmentPairing" class="text-sm text-gray-600 dark:text-gray-400 mt-2">
-                Open the Midori Sync popup in Midori Desktop, enter the code shown here, then select Connect account.
+            <h2 id="pairing-heading" class="text-base font-semibold text-gray-900 dark:text-gray-100">Connect Android</h2>
+            <p class="text-sm text-gray-600 dark:text-gray-400 mt-2">
+                On your phone, open Midori Sync and tap Scan QR code.
             </p>
-            <p v-else class="text-sm text-gray-600 dark:text-gray-400 mt-2">
-                Open the Midori Sync popup in Midori Desktop and select Connect account to sign in with your Astian account.
-            </p>
+            <div v-if="pairingQr" class="mt-4">
+                <img :src="pairingQr" alt="Scan this QR code with Midori Android to connect your account" width="280" height="280" class="max-w-full" />
+                <p class="mt-2 text-sm text-gray-600 dark:text-gray-400" role="status">Expires in {{ timeRemaining }}. This QR code works once.</p>
+            </div>
             <div v-if="developmentPairing && pairingCode" class="mt-4">
                 <div class="flex flex-wrap items-center gap-3">
                     <span class="font-mono text-xl sm:text-2xl font-semibold tracking-wider text-gray-900 dark:text-gray-100 select-all" aria-label="Pairing code">{{ displayedCode }}</span>
@@ -148,18 +161,19 @@ function saveEdit(device) {
                 </div>
                 <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">Expires in {{ timeRemaining }}. The code works once.</p>
             </div>
-            <p v-if="developmentPairing && pairingError" class="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">{{ pairingError }}</p>
+            <p v-if="pairingError" class="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">{{ pairingError }}</p>
             <div class="mt-4 flex flex-wrap items-center gap-3">
-                <button v-if="developmentPairing" type="button" :disabled="pairingLoading" @click="generatePairingCode" class="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50">
-                    {{ pairingLoading ? 'Generating…' : pairingCode ? 'Generate another code' : 'Generate pairing code' }}
+                <button type="button" :disabled="pairingLoading" @click="generatePairingCode" class="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50">
+                    {{ pairingLoading ? 'Generating…' : pairingCode ? 'Generate another QR code' : 'Show QR code' }}
                 </button>
                 <button type="button" @click="router.reload({ only: ['devices'] })" class="text-sm text-gray-600 dark:text-gray-400 hover:underline">Refresh devices</button>
             </div>
+            <p class="mt-4 text-sm text-gray-600 dark:text-gray-400">To connect Midori Desktop, open Midori Sync in your browser and select Connect account.</p>
         </section>
 
         <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg">
             <div v-if="!devices?.length" class="px-4 py-12 text-center text-sm text-gray-400 dark:text-gray-500">
-                {{ developmentPairing ? 'No devices connected yet. Generate a code above to connect Midori Desktop.' : 'No devices connected yet. Connect your account from the Midori Sync popup in Midori Desktop.' }}
+                No devices connected yet. Scan the QR code above with Midori Android or sign in from Midori Sync on your device.
             </div>
 
             <div

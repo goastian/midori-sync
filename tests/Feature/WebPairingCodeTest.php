@@ -103,6 +103,22 @@ class WebPairingCodeTest extends TestCase
         ])->assertNotFound();
     }
 
+    public function test_web_qr_token_connects_one_android_device_with_a_renewable_session(): void
+    {
+        config(['services.sync.local_dev' => false, 'services.authentik.issuer' => 'https://accounts.example.invalid/application/o/midori-sync/']);
+        $user = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);
+        $code = $this->actingAs($user)->postJson('/devices/pairing-code')->assertOk()->json('pairing_token');
+        $body = ['pairing_token' => $code, 'device_name' => 'Midori Android', 'device_type' => 'mobile', 'native_refresh' => true];
+
+        $session = $this->postJson('/api/v1/pair/redeem', $body)->assertCreated()
+            ->assertJsonPath('device.type', 'mobile')->assertJsonPath('identity.subject', $user->authentik_id);
+        $this->assertNotEmpty($session->json('refresh_token'));
+        $this->withToken($session->json('token'))->getJson('/api/v1/account')->assertOk()
+            ->assertJsonPath('device.id', $session->json('device.id'));
+        $this->postJson('/api/v1/pair/redeem', $body)->assertNotFound();
+        $this->assertDatabaseCount('devices', 1);
+    }
+
     public function test_web_code_requires_a_logged_in_account_with_a_bound_identity(): void
     {
         $this->postJson('/devices/pairing-code')->assertUnauthorized();

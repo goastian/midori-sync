@@ -36,6 +36,8 @@ onBeforeUnmount(() => {
             <Link href="/settings" class="font-medium text-primary-600 dark:text-primary-400 hover:underline">Reset your synced data</Link>
         </p>
 
+        <Link href="/devices?connect=android" class="mt-6 inline-flex rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Connect Android</Link>
+
         <div class="mt-10 grid grid-cols-2 lg:grid-cols-4 gap-5">
             <component
                 :is="tile.href ? Link : 'div'"

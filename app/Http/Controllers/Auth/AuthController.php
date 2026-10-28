@@ -54,6 +54,8 @@ class AuthController extends Controller
         ], $request);
 
         if ($request->session()->has('sync_browser_authorization')) {
+            $request->session()->put('sync_browser_authorization.authenticated_user_id', (string) $user->id);
+
             return redirect()->route('auth.desktop.confirm');
         }
 

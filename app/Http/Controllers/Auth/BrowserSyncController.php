@@ -26,19 +26,21 @@ class BrowserSyncController extends Controller
         abort_unless($this->validRedirect($data['redirect_uri'], $data['device_type']), 422);
         $request->session()->put(self::SESSION_KEY, $data + ['expires_at' => now()->addMinutes(10)->timestamp]);
 
-        return redirect()->route(Auth::check() ? 'auth.desktop.confirm' : 'auth.redirect')
+        return redirect()->route('auth.redirect')
             ->header('Cache-Control', 'no-store');
     }
 
-    public function confirm(Request $request): Response
+    public function confirm(Request $request, SyncBrowserAuthorizationService $authorization)
     {
-        if (! $this->pending($request)) {
+        $pending = $this->pending($request);
+        if (! $pending) {
             return $this->expired();
         }
         abort_unless(Auth::check(), 401);
 
-        return response()->view('auth.desktop', ['deviceType' => $this->pending($request)['device_type'] ?? 'desktop'])
-            ->header('Cache-Control', 'no-store');
+        abort_unless(($pending['authenticated_user_id'] ?? null) === (string) $request->user()->id, 403);
+
+        return $this->approve($request, $authorization);
     }
 
     public function approve(Request $request, SyncBrowserAuthorizationService $authorization)
@@ -48,6 +50,7 @@ class BrowserSyncController extends Controller
             return $this->expired();
         }
         abort_unless(Auth::check(), 401);
+        abort_unless(($pending['authenticated_user_id'] ?? null) === (string) $request->user()->id, 403);
         $code = $authorization->issue($request->user(), $pending['code_challenge'], $pending['device_type'] ?? 'desktop');
         $request->session()->forget(self::SESSION_KEY);
         $query = http_build_query(['state' => $pending['state'], 'code' => $code], '', '&', PHP_QUERY_RFC3986);

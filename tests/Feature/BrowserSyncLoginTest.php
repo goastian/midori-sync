@@ -40,9 +40,12 @@ class BrowserSyncLoginTest extends TestCase
 
         $this->actingAs($user)->get('/auth/desktop?'.http_build_query([
             'state' => $state, 'code_challenge' => $challenge, 'redirect_uri' => $redirect,
-        ]))->assertRedirect(route('auth.desktop.confirm'));
-        $this->get('/auth/desktop/confirm')->assertOk()->assertSee('Connect Midori Desktop');
-        $response = $this->post('/auth/desktop/confirm')->assertRedirect();
+        ]))->assertRedirect(route('auth.redirect'));
+        $this->get('/auth/desktop/confirm')->assertForbidden();
+        $this->post('/auth/desktop/confirm')->assertForbidden();
+        $this->completeWebLogin($user);
+        $response = $this->get('/auth/desktop/confirm')->assertRedirect();
+        $response->assertHeader('Cache-Control', 'no-store, private');
         $location = $response->headers->get('Location');
         $this->assertStringStartsWith($redirect.'?', $location);
         parse_str(parse_url($location, PHP_URL_QUERY), $parameters);
@@ -79,6 +82,28 @@ class BrowserSyncLoginTest extends TestCase
         $this->assertDatabaseCount('sync_browser_authorizations', 0);
     }
 
+    public function test_desktop_completion_cannot_reuse_authentication_from_another_request_or_user(): void
+    {
+        $user = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);
+        $query = http_build_query([
+            'state' => str_repeat('s', 43), 'code_challenge' => str_repeat('c', 43),
+            'redirect_uri' => 'http://127.0.0.1:41831/midori-sync/callback',
+            'authenticated_user_id' => (string) $user->id,
+        ]);
+        $this->actingAs($user)->get('/auth/desktop?'.$query)->assertRedirect(route('auth.redirect'));
+        $this->get('/auth/desktop/confirm')->assertForbidden();
+        $this->completeWebLogin($user);
+
+        $other = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);
+        $this->actingAs($other)->get('/auth/desktop/confirm')->assertForbidden();
+        $this->post('/auth/desktop/confirm')->assertForbidden();
+
+        $this->actingAs($user)->get('/auth/desktop?'.$query)->assertRedirect(route('auth.redirect'));
+        $this->get('/auth/desktop/confirm')->assertForbidden();
+        $this->assertDatabaseCount('sync_browser_authorizations', 0);
+        $this->assertDatabaseCount('devices', 0);
+    }
+
     public function test_mobile_login_binds_the_device_type_before_redeeming_the_pkce_code(): void
     {
         $user = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);
@@ -90,9 +115,16 @@ class BrowserSyncLoginTest extends TestCase
         $this->actingAs($user)->get('/auth/desktop?'.http_build_query([
             'state' => str_repeat('s', 43), 'code_challenge' => $challenge,
             'redirect_uri' => $redirect, 'device_type' => 'mobile',
-        ]))->assertRedirect(route('auth.desktop.confirm'));
-        $this->get('/auth/desktop/confirm')->assertOk()->assertSee('Connect Midori Android');
-        $response = $this->post('/auth/desktop/confirm')->assertRedirect();
+        ]))->assertRedirect(route('auth.redirect'));
+        $this->get('/auth/desktop/confirm')->assertForbidden();
+        $this->post('/auth/desktop/confirm')->assertForbidden();
+        $this->completeWebLogin($user);
+        $other = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);
+        $this->actingAs($other)->get('/auth/desktop/confirm')->assertForbidden();
+        $this->actingAs($user);
+        $response = $this->get('/auth/desktop/confirm')->assertRedirect();
+        $response->assertHeader('Cache-Control', 'no-store, private');
+        $this->get('/auth/desktop/confirm')->assertStatus(410);
         parse_str(parse_url($response->headers->get('Location'), PHP_URL_QUERY), $parameters);
         $this->assertStringStartsWith($redirect.'?', $response->headers->get('Location'));
         $body = ['code' => $parameters['code'], 'code_verifier' => $verifier,
@@ -128,9 +160,9 @@ class BrowserSyncLoginTest extends TestCase
         $this->actingAs($user)->get('/auth/desktop?'.http_build_query([
             'state' => str_repeat('s', 43), 'code_challenge' => str_repeat('c', 43),
             'redirect_uri' => 'http://127.0.0.1:41831/midori-sync/callback',
-        ]))->assertRedirect(route('auth.desktop.confirm'));
+        ]))->assertRedirect(route('auth.redirect'));
         $this->travel(4)->minutes();
-        $this->get('/auth/desktop/confirm')->assertOk()->assertSee('Connect Midori Desktop');
+        $this->completeWebLogin($user);
         $this->travel(7)->minutes();
         $this->get('/auth/desktop/confirm')->assertStatus(410)
             ->assertSee('This connection request has expired')->assertDontSee('Exception trace');
@@ -149,6 +181,15 @@ class BrowserSyncLoginTest extends TestCase
             'redirect_uri' => 'http://127.0.0.1:41831/midori-sync/callback',
         ]))->assertRedirect(route('auth.redirect'));
 
+        $this->completeWebLogin($user);
+        $response = $this->get('/auth/desktop/confirm')->assertRedirect();
+        $this->assertStringStartsWith('http://127.0.0.1:41831/midori-sync/callback?', $response->headers->get('Location'));
+        $this->get('/auth/desktop/confirm')->assertStatus(410);
+        $this->assertSame(config('services.authentik.issuer'), $user->fresh()->authentik_issuer);
+    }
+
+    private function completeWebLogin(User $user): void
+    {
         $identity = Mockery::mock();
         $identity->shouldReceive('getId')->andReturn($user->authentik_id);
         $identity->shouldReceive('getEmail')->andReturn($user->email);
@@ -159,7 +200,5 @@ class BrowserSyncLoginTest extends TestCase
         Socialite::shouldReceive('driver')->with('authentik')->andReturn($provider);
 
         $this->get('/auth/callback')->assertRedirect(route('auth.desktop.confirm'));
-        $this->get('/auth/desktop/confirm')->assertOk();
-        $this->assertSame(config('services.authentik.issuer'), $user->fresh()->authentik_issuer);
     }
 }
