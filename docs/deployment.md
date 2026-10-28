@@ -67,6 +67,8 @@ SYNC_RATE_LIMIT=60
 
 Desktop sign-in uses the existing confidential web client. Set `AUTHENTIK_CLIENT_ID`, `AUTHENTIK_CLIENT_SECRET`, `AUTHENTIK_BASE_URL`, `AUTHENTIK_ISSUER`, and `AUTHENTIK_REDIRECT_URI` as for the dashboard. Deploy the `sync_browser_authorizations` migration. After Authentik login, the user approves the Desktop connection in Midori Sync; a single-use, PKCE-bound authorization returns to the browser through loopback. No code is copied by the user, and the client secret stays on the server. Leave `AUTHENTIK_NATIVE_CLIENT_ID` and `AUTHENTIK_NATIVE_DISCOVERY_URL` empty unless the optional direct public OIDC flow is also configured.
 
+Compose requires `AUTHENTIK_ISSUER` and forwards the authentication variables to the app container. Setting a value in the host's `.env` is insufficient unless the container receives it. Use the exact `issuer` from the application's `/.well-known/openid-configuration` document, including its trailing slash. Do not infer it from `AUTHENTIK_BASE_URL`: Authentik supports both shared and per-application issuers.
+
 For optional direct Desktop sign-in, configure a separate **Public** Authentik OAuth2 provider with authorization code, PKCE S256 and the `openid`, `profile` and `email` scope mappings. The existing `AUTHENTIK_CLIENT_ID` and `AUTHENTIK_CLIENT_SECRET` belong to the dashboard's confidential login; Desktop cannot use that client secret. Set both the dashboard's confidential provider and the Desktop public provider to Authentik's shared issuer mode and the same subject mode. Set `AUTHENTIK_ISSUER` to the shared issuer, normally `https://authentik.yourdomain.com/`; keep `AUTHENTIK_NATIVE_DISCOVERY_URL` under the public provider's application slug. The Sync API advertises the public client ID and discovery URL to Desktop through `/api/v1/capabilities`; they are not hardcoded in the browser. Register the Desktop redirect URI as an anchored regex, `^http://127\.0\.0\.1:[0-9]{1,5}/midori-sync/callback$`. Do not leave the provider's redirect URI list empty. Midori chooses an available loopback port for each authorization and never embeds a client secret. Users of an existing per-provider issuer must sign in to the web dashboard again after the issuer change; a still-open web session cannot silently rebind the identity. Preserve the same subject mode when changing issuer. A local Sync API can use this flow with `SYNC_LOCAL_DEV=false` and the same HTTPS Authentik configuration.
 
 ### 3. Start services
@@ -86,6 +88,37 @@ This starts:
 docker compose exec app php artisan migrate --seed
 ```
 
+### 5. Verify Desktop authentication
+
+```bash
+docker compose exec app php artisan sync:check-auth
+curl --fail --silent --show-error https://sync.yourdomain.com/api/v1/capabilities
+```
+
+`sync:check-auth` validates the effective Laravel configuration without contacting Authentik or exposing credentials. It must report a configured issuer and at least one enabled Desktop login flow. The public capabilities response must contain that same `authentication.issuer` and `authentication.browser_login.version: 1` for the existing web client. `native_ready` is unrelated to login availability.
+
+If Desktop displays "Direct account sign-in is not configured on this Sync server", inspect the public response first. An `issuer: null` with `browser_login: null` and `oidc: null` means the backend cannot authorize Desktop. `/auth/redirect` can still work in this state; `/auth/desktop` returns 503. Configure the server environment rather than overriding detection in Desktop.
+
+After changing environment variables, recreate the app container and rebuild Laravel's configuration cache:
+
+```bash
+docker compose up -d --force-recreate app
+docker compose exec app php artisan config:cache
+docker compose exec app php artisan sync:check-auth
+```
+
+For Podman/Quadlet, update the file referenced by `EnvironmentFile=` in the app unit and restart that unit so the container receives the new values. The supplied `container/config/init.sh` rebuilds the configuration cache on startup. Run `podman exec midori-sync php artisan sync:check-auth` afterward. Editing only the project's `.env` or running `config:cache` inside a container with the old environment does not update its injected variables.
+
+For the official deployment at `https://sync.astian.org`, the public configuration is:
+
+```env
+APP_URL=https://sync.astian.org
+AUTHENTIK_BASE_URL=https://accounts.astian.org
+AUTHENTIK_ISSUER=https://accounts.astian.org/application/o/midori-sync/
+AUTHENTIK_REDIRECT_URI=https://sync.astian.org/auth/callback
+```
+
+Confirm the issuer against `https://accounts.astian.org/application/o/midori-sync/.well-known/openid-configuration` before applying it. Keep the existing confidential client ID and secret on the server. No Authentik client secret belongs in `midori-desktop`.
 
 ## Authentik Setup
 

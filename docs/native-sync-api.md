@@ -1,5 +1,19 @@
 # Native Sync API: change feed and operations
 
+Desktop delivery scope (2026-10-23): bookmarks, history, passwords, credit cards,
+form history, addresses, tabs and portable preferences. Desktop temporarily disables
+workspace, extension, extension-settings and other additional adapters while retaining
+their implementations for a later update. Server capability support remains available;
+it does not enable these features in Desktop. Account collections remain shared across
+Desktop and Mobile; native Mobile interoperability still requires its own client tests.
+
+Local verification (2026-10-23): 255 backend tests and 3037 assertions on isolated
+PostgreSQL; eight real Desktop browser processes and 153 checks over HTTP, plus
+six form-history/address processes and 222 checks. The Desktop primary delivery
+report records source hashes, native/UI regressions and the intentionally deferred scope.
+These results do not certify staging, a Mobile binary or other desktop platforms.
+
+
 Status: initial implementation with local PostgreSQL runtime and concurrency coverage.
 `GET /api/v1/capabilities` deliberately returns `native_ready: false` until the
 remaining native protocol and migration gates are met. This is not a release
@@ -13,6 +27,40 @@ and response schemas, per-operation outcomes, byte limits and reset behavior.
 The native OIDC exchange is available when a public Authentik client is configured; Desktop completes authorization code with PKCE before calling it.
 The retired extension routes have been removed. The format
 follows the [OpenAPI specification](https://spec.openapis.org/oas/v3.1.0.html).
+
+## Shared Desktop and Mobile account
+
+Desktop and Mobile use the same account-scoped collection streams. Device type is metadata;
+it does not partition bookmarks, history, passwords, cards, form history, addresses, workspace metadata, tabs or
+portable settings. Each installation owns its session, device ID and authenticated cursors.
+Tabs intentionally retain a separate snapshot per device inside the shared `tabs` collection.
+Clients must agree on plaintext schemas and native cryptographic/identity vectors before
+exchanging real data; successful opaque transport alone does not certify Mobile integration.
+`ClientCustodyTest` exercises both directions using `desktop` and `mobile` sessions for all
+nine collections, including preservation of encrypted tombstones.
+
+Authenticated read and write rate-limit buckets belong to the account. Different accounts
+behind the same IP do not consume each other's authenticated allowance; devices and
+sessions of one account share its allowance even when their IPs differ. Authentication
+runs before the API limiter, with CORS wrapping both so allowed clients can read 401/429
+responses. Pairing and renewal keep their separate per-IP unauthenticated limit. Missing
+or invalid bearer tokens on protected routes consume a separate failed-authentication
+bucket per IP, using `services.sync.unauth_rate_limit` over 60 seconds; after exhaustion
+further lookups stop and return uncacheable `429 rate_limited` with `Retry-After`.
+`RateLimitTest`, `UnauthRateLimitTest` and `CorsTest` cover this ordering and isolation.
+
+The `change_page_byte_budget` feature allows `GET /sync/collections/{name}/changes` to accept
+`max_bytes` from 32768 to 4194304. The server counts serialized changes including JSON
+escaping and reserves 16 KiB for cursor and response metadata. Desktop negotiates 2097152
+bytes, matching its engine limit. Follow `has_more` and `next_cursor` even when a page has
+fewer rows than `limit`; local encrypted pages can also end early at their byte limit.
+Older clients can omit the parameter. A record that cannot fit individually returns 413.
+
+Loss of client keys never authorizes an automatic data reset. The explicit `/crypto/reset`
+flow still requires confirmation. Its session and crypto revision are rechecked inside the
+same account-locked storage transaction that removes the records and keys; a concurrent
+revocation or newer revision prevents deletion. Reset also invalidates outstanding device
+enrollments so an approval from the previous key epoch cannot be reused.
 
 ## Client custody extension (2026-10-15)
 
@@ -159,10 +207,39 @@ physical storage still needs its separate retention budget.
 
 Capabilities advertise `authenticated_controls`, `journal_compaction`,
 `client_recovery.authenticated_controls: true`, `compaction_version: 1` and
-`history_reconciliation_version: 1`. `collections` lists all eleven streams,
-including `form-history` and `addresses`; their native KDF indices are 12 and 13.
-Credit cards retain index 11. Form values, names and address fields stay inside
+`history_reconciliation_version: 1`. `collections` lists all fifteen streams,
+including `form-history`, `addresses`, `workspaces`, `site-permissions`, `extensions` and `extension-settings`; their native KDF indices are 12, 13, 14, 15, 16 and 17.
+Credit cards retain index 11. Workspace metadata requires `workspace_metadata` and
+`data_schemas.workspaces: 1`; its encrypted value is exactly `{version: 1, name, icon}`
+under a stable `w1:<uuid>` record ID. It does not contain a window ID, selected workspace,
+default role or native tab membership. Desktop materializes received metadata automatically
+in normal windows; an in-use deletion or a 25-workspace capacity limit becomes a visible
+conflict. The shared contract is [workspace metadata](workspace-metadata.md). Form values, names and address fields stay inside
 ciphertext, never in public record IDs.
+
+Custom blocking text uses `midori-privacy`, `data_schemas["midori-privacy"]: 1`
+and the explicit `custom_filters` feature. Its manifest and account-derived
+immutable parts follow the [shared custom-filter contract](custom-filters.md).
+This capability does not cover catalog list choices or site permissions.
+
+Portable site blocks and exceptions use the independent `site-permissions`
+collection, generation 1 and `site_permissions` feature. Sensitive grants remain
+local. The [site-permission contract](site-permissions.md) specifies identities,
+permitted actions, expiry, conflicts and persistence requirements. Desktop
+integration is still in development; server capabilities do not certify clients.
+
+Official extension references use `extensions`, `data_schemas.extensions: 1`
+and `extension_catalog`. The [extension contract](extensions.md) defines the
+closed catalog-ID schema, explicit uninstall provenance and local permission
+confirmation. Desktop integration is in development.
+
+Extension configuration has its independent `extension-settings` collection,
+`data_schemas["extension-settings"]: 1`, feature `extension_settings` and KDF 17.
+The [configuration contract](extension-settings.md) defines extension-scoped
+canonical JSON, encrypted parts/manifests, per-key merges and atomic native
+replacement. It covers only data an eligible extension stores in `storage.sync`.
+Installation, permission grants and other extension storage keep their own local
+rules. The Desktop adapter is under validation; Mobile support is not certified.
 
 A control contains exactly `version: 1`, `epoch`, `collection`, `operation_id`,
 `previous_generation`, a new client-chosen `generation`, `control_revision`
@@ -275,6 +352,10 @@ keeping backup, application and client recovery keys separate.
 | DELETE | `/crypto/native-keys/{keyId}` | Retire a key only without current or journal references |
 | POST | `/crypto/rotate` | Disabled; use resumable rotation |
 | PUT | `/crypto/native-keys/{keyId}` | Disabled; use resumable rotation |
+| POST/GET | `/crypto/enrollments` | Request device enrollment (creator) or list live pending requests (approvers) |
+| GET/DELETE | `/crypto/enrollments/{id}` | Creator polls status/result, or cancels and erases the row |
+| POST | `/crypto/enrollments/{id}/approve` | Another device relays an opaque end-to-end encrypted payload |
+| POST | `/crypto/enrollments/{id}/deny` | Another device rejects a pending request |
 | DELETE | `/sync/data` | Authenticated multi-collection clear; legacy reset also erases key bundles |
 
 The collection routes require a valid bearer session bound to a device
@@ -314,6 +395,35 @@ The isolated local launcher also shows **Open local Sync** on its homepage;
 this signs in to its prepared synthetic account and opens the Devices page.
 That entry is only registered in the explicit local/testing launcher and only
 accepts requests from a loopback address.
+
+## Device enrollment
+
+`crypto.enrollment: true` in `/capabilities` advertises device enrollment: a
+signed-in device B without keys asks an unlocked device A of the same account
+to approve it. The server only relays opaque data and never sees keys. All
+routes require a valid bearer, are scoped to the account and use `throttle:sync`.
+
+Public keys (`public_key`, `approver_public_key`) are base64 or base64url of a
+65-byte uncompressed P-256 point (`0x04` prefix), at most 128 characters.
+
+| Request | Response |
+| --- | --- |
+| `POST /crypto/enrollments` `{public_key, device_name?<=100}` | `201 {id, status:"pending", expires_at}` |
+| `GET /crypto/enrollments` | `200 {enrollments:[{id, public_key, device_name, created_at, expires_at}]}`, pending and unexpired only, never payloads |
+| `GET /crypto/enrollments/{id}` (creating session only) | `200 {id, status, expires_at}` with `status` one of `pending`, `approved`, `denied`, `expired`; when approved also `approver_public_key` and `payload` |
+| `POST /crypto/enrollments/{id}/approve` `{approver_public_key, payload<=16384}` | `204` |
+| `POST /crypto/enrollments/{id}/deny` | `204` |
+| `DELETE /crypto/enrollments/{id}` (creating session only) | `204`, erases the row and payload |
+
+Requests live for 10 minutes. An account has at most three live pending
+requests (`429 too_many_enrollments`); a new request from the same session
+replaces that session's previous one. Unknown ids, other accounts and, for
+read/cancel, other sessions return `404 enrollment_not_found`. Approving or
+denying from the creating session or device returns `403 self_approval_forbidden`;
+a request that is not pending or has expired returns `409 enrollment_not_pending`.
+Denial clears any payload. Expired rows (and their payloads) are removed by
+`sync:cleanup-expired`; expired rows are never served. Creating a request also
+emits a change hint on the account's notification stream so approvers wake up.
 
 ### Native account identity
 
@@ -700,3 +810,11 @@ ciphertext. Record identifiers stay opaque strings of at most 255 bytes; tab fra
 Older clients reject unknown plaintext fields and quarantine the record; they keep their local
 data and resume when updated. Clients must not publish the new fields while `data_schemas`
 is absent or lower than their generation.
+
+### Account-password key capsule (version 1)
+
+Capabilities advertise `crypto.password_unlock_version: 1`. `CryptoState.password_unlock` indicates a capsule matching the current epoch and key IDs. `PUT /crypto/password` stores `{crypto:{epoch,revision},capsule:{version:1,key:{key_id,encrypted_bundle},payload}}` under the account lock after session and revision checks. Requires client custody without active rotation. Maximum request 65536 UTF-8 bytes; capsule payload 49152 bytes, protecting at most 32768 plaintext bytes. It rejects plaintext `password` and `recovery_secret`, does not advance the registry revision and never rewrites data records.
+
+`GET /crypto/password` returns `{epoch,capsule}` or `409 password_backup_unavailable`, with `Cache-Control: no-store`. Rotation/key retirement invalidates stale capsules; explicit crypto reset deletes them. The envelope must use native v2 `purpose:local`, collection `browser-settings`, ID `sync-password-backup-v1`, generation=crypto epoch, schema 1 and base revision `0`. The password wraps a separate random native key using UTF-8 `MidoriSync/account-password/v1\0` + the exact unnormalized password, with the standard Argon2id/native bundle. The payload protects local wrapping material, current data/identity bundles and an optional known recovery code. Clients verify AEAD, scope, epoch, key IDs and the authenticated registry before saving recovered keys.
+
+OIDC never supplies the password: users enter it locally. Existing accounts need retained local keys or their recovery code to configure the capsule. An Astian password change needs an explicit capsule update from an unlocked profile; an old capsule may still need the previous password. Rewrapping does not revoke historical keys or backups; compromise requires key rotation. Offline guessing and an identity provider that captures the password are part of this mode’s threat model. Desktop/Mobile byte contract and migration: [account password design](../../docs/sync-clave-cuenta.md).

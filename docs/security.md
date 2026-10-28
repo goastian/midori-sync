@@ -134,8 +134,9 @@ proxies and telemetry; the local HTTP test is not a production TLS validation.
 
 ### 4.2 CORS (`SyncApiCors`)
 
-- Config-based whitelisting via `CORS_ALLOWED_ORIGINS`
-  (TODO: currently `*`).
+- Config-based whitelisting via `CORS_ALLOWED_ORIGINS` (exact match) and
+  `CORS_ALLOWED_ORIGIN_PATTERNS` (regex); no wildcard default — origins
+  outside both lists never get an `Access-Control-Allow-Origin` header.
 - Preflight: `OPTIONS` responds only with allowed headers.
 - `Origin` echo only if present in the allowlist.
 - Expected origins: configured dashboard and API clients. Local defaults do not include browser-extension origins.

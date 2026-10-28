@@ -314,7 +314,8 @@
           "401": {
             "description": "Missing, expired, reused or invalid notification ticket"
           }
-        }
+        },
+        "x-midori-runtime": "notification-daemon"
       }
     },
     "/sync/collections/{name}/changes": {
@@ -326,7 +327,7 @@
       "get": {
         "operationId": "getCollectionChanges",
         "summary": "Read a stable page of encrypted changes",
-        "description": "Start without a cursor. Follow next_cursor until has_more=false to finish the snapshot fence; later writes appear on a later poll. Downloading does not acknowledge. The sum of serialized record snapshots is capped at 4 MiB, excluding outer response overhead. Clients must also honor record TTL. Session, owned device and bound identity are revalidated under the account lock, including requests admitted before a concurrent session revocation.",
+        "description": "Start without a cursor. Follow next_cursor until has_more=false to finish the snapshot fence; later writes appear on a later poll. Downloading does not acknowledge. With feature change_page_byte_budget, max_bytes bounds the serialized JSON response, counting escaping and reserving space for metadata/cursors. Default 4 MiB. A byte-limited page may contain fewer than limit records; follow has_more and next_cursor. Clients must also honor record TTL. Session, owned device and bound identity are revalidated under the account lock, including requests admitted before a concurrent session revocation.",
         "responses": {
           "200": {
             "description": "Ordered immutable changes within the snapshot fence",
@@ -369,6 +370,16 @@
           }
         },
         "parameters": [
+          {
+            "name": "max_bytes",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 32768,
+              "maximum": 4194304,
+              "default": 4194304
+            }
+          },
           {
             "name": "cursor",
             "in": "query",
@@ -1585,6 +1596,524 @@
           }
         ]
       }
+    },
+    "/crypto/enrollments": {
+      "post": {
+        "operationId": "createDeviceEnrollment",
+        "summary": "Request enrollment of this device",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "public_key": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "description": "Base64 or base64url of a 65-byte uncompressed P-256 point."
+                  },
+                  "device_name": {
+                    "type": "string",
+                    "maxLength": 100
+                  }
+                },
+                "required": [
+                  "public_key"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Pending enrollment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "const": "pending"
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "expires_at"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed"
+          },
+          "429": {
+            "description": "too_many_enrollments or rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listDeviceEnrollments",
+        "summary": "List live pending enrollment requests",
+        "responses": {
+          "200": {
+            "description": "Pending requests, never payloads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enrollments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "public_key": {
+                            "type": "string",
+                            "maxLength": 128,
+                            "description": "Base64 or base64url of a 65-byte uncompressed P-256 point."
+                          },
+                          "device_name": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "expires_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "public_key",
+                          "device_name",
+                          "created_at",
+                          "expires_at"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "enrollments"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/crypto/enrollments/{id}": {
+      "get": {
+        "operationId": "getDeviceEnrollment",
+        "summary": "Read enrollment status (creating session only)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "enum": [
+                        "pending",
+                        "approved",
+                        "denied",
+                        "expired"
+                      ]
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "approver_public_key": {
+                      "type": "string",
+                      "maxLength": 128,
+                      "description": "Base64 or base64url of a 65-byte uncompressed P-256 point."
+                    },
+                    "payload": {
+                      "type": "string",
+                      "maxLength": 16384
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "expires_at"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "enrollment_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteDeviceEnrollment",
+        "summary": "Cancel or finish enrollment (creating session only)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted with payload"
+          },
+          "404": {
+            "description": "enrollment_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/crypto/enrollments/{id}/approve": {
+      "post": {
+        "operationId": "approveDeviceEnrollment",
+        "summary": "Approve with an opaque encrypted payload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "approver_public_key": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "description": "Base64 or base64url of a 65-byte uncompressed P-256 point."
+                  },
+                  "payload": {
+                    "type": "string",
+                    "maxLength": 16384
+                  }
+                },
+                "required": [
+                  "approver_public_key",
+                  "payload"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Approved"
+          },
+          "403": {
+            "description": "self_approval_forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "enrollment_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "enrollment_not_pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/crypto/enrollments/{id}/deny": {
+      "post": {
+        "operationId": "denyDeviceEnrollment",
+        "summary": "Deny an enrollment request",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Denied"
+          },
+          "403": {
+            "description": "self_approval_forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "enrollment_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "enrollment_not_pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/crypto/password": {
+      "get": {
+        "operationId": "getPasswordKeyBackup",
+        "summary": "Read the account password encrypted key capsule",
+        "description": "Requires a native session. Returns 409 password_backup_unavailable if no capsule matches the current key IDs and epoch. Cache-Control: no-store. The server never receives the account password.",
+        "responses": {
+          "200": {
+            "description": "Opaque current key capsule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordBackup"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "put": {
+        "operationId": "savePasswordKeyBackup",
+        "summary": "Protect existing Sync keys with the account password locally",
+        "description": "Maximum 65536 UTF-8 request bytes. Validates the session and CAS epoch/revision under the account lock. Requires client custody with no active rotation. Stores ciphertext only; never send password or recovery_secret. Does not change the key registry, revision, identity or data records.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordBackupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Capsule stored; Cache-Control: no-store"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "413": {
+            "description": "Request too large"
+          },
+          "422": {
+            "description": "Invalid capsule or plaintext password/recovery_secret supplied"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1830,7 +2359,11 @@
           "passwords",
           "credit-cards",
           "form-history",
-          "addresses"
+          "addresses",
+          "workspaces",
+          "site-permissions",
+          "extensions",
+          "extension-settings"
         ]
       },
       "Identity": {
@@ -2085,6 +2618,10 @@
               2
             ],
             "description": "Version 2 authenticates the resulting crypto revision in the key-registry MAC. Omission in requests is legacy version 1; a version-2 registry cannot downgrade."
+          },
+          "password_unlock": {
+            "type": "boolean",
+            "description": "True when a password-encrypted key capsule matches the current epoch and key IDs. False after key rotation until an unlocked client replaces the capsule. Optional on older servers."
           }
         },
         "required": [
@@ -2545,11 +3082,30 @@
           },
           "data_schemas": {
             "type": "object",
-            "description": "Highest client plaintext schema generation documented per collection. The server stores ciphertext only.",
+            "description": "Highest client capability generation per collection, not a value to copy into plaintext version. Bookmarks and history use plaintext version 1 with generation 2; tabs publishes version 2. midori-privacy generation 1 requires custom_filters and covers custom filter text only. site-permissions generation 1 requires site_permissions and covers portable site blocks and exceptions, never sensitive grants. The server stores ciphertext only.",
             "additionalProperties": {
               "type": "integer",
               "minimum": 1
             }
+          },
+          "crypto": {
+            "type": "object",
+            "properties": {
+              "enrollment": {
+                "const": true
+              },
+              "password_unlock_version": {
+                "type": "integer",
+                "const": 1
+              },
+              "reset": {
+                "type": "boolean",
+                "const": true
+              }
+            },
+            "required": [
+              "enrollment"
+            ]
           }
         },
         "required": [
@@ -3823,6 +4379,60 @@
           "compacted_through",
           "snapshot_sequence",
           "records"
+        ]
+      },
+      "PasswordCapsule": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "key": {
+            "$ref": "#/components/schemas/WrappedKey"
+          },
+          "payload": {
+            "type": "string",
+            "maxLength": 49152,
+            "description": "Native crypto v2 purpose=local envelope, browser-settings/sync-password-backup-v1, generation=crypto epoch, schema_version=1, base_revision=0. Ciphertext protects at most 32768 plaintext bytes; see native-sync-api.md."
+          }
+        },
+        "required": [
+          "version",
+          "key",
+          "payload"
+        ]
+      },
+      "PasswordBackup": {
+        "type": "object",
+        "properties": {
+          "epoch": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "capsule": {
+            "$ref": "#/components/schemas/PasswordCapsule"
+          }
+        },
+        "required": [
+          "epoch",
+          "capsule"
+        ]
+      },
+      "PasswordBackupRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "crypto": {
+            "$ref": "#/components/schemas/CryptoContext"
+          },
+          "capsule": {
+            "$ref": "#/components/schemas/PasswordCapsule"
+          }
+        },
+        "required": [
+          "crypto",
+          "capsule"
         ]
       }
     }
