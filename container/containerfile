@@ -1,0 +1,126 @@
+# Midori Sync — imagen endurecida (Nginx + PHP-FPM + Supervisor) sobre
+# Alpine 3.24 con paquetes php85-* precompilados (sin compilar nada).
+# Contexto = raíz del repo; container/ se excluye vía .containerignore
+# salvo container/config/, copiada explícitamente más abajo.
+#
+#   podman build -t localhost/midori-sync:latest \
+#       -f container/containerfile --ignorefile container/.containerignore .
+#
+# "Shell-less": container/config/php-security.ini desactiva
+# exec/shell_exec/system/proc_open/popen/pcntl_exec. El mantenimiento real
+# (migraciones, limpieza, backups) se hace desde fuera con
+# `podman exec <contenedor> php artisan ...`, sin necesidad de shell.
+
+FROM docker.io/alpine:3.24
+
+ENV APP_HOME=/var/www/html \
+    COMPOSER_ALLOW_SUPERUSER=1 \
+    APP_ENV=production
+
+WORKDIR ${APP_HOME}
+
+# Runtime: nginx + supervisor + php85 y sus extensiones (precompiladas por
+# Alpine, sin compilar nada). npm (node) se instala como paquete virtual
+# ".build" solo para compilar el frontend y se purga en la última capa.
+RUN apk add --no-cache \
+        curl \
+        nginx \
+        supervisor \
+        php85 \
+        php85-bcmath \
+        php85-ctype \
+        php85-curl \
+        php85-dom \
+        php85-fileinfo \
+        php85-fpm \
+        php85-iconv \
+        php85-intl \
+        php85-mbstring \
+        php85-openssl \
+        php85-pcntl \
+        php85-pdo_pgsql \
+        php85-pecl-redis \
+        php85-phar \
+        php85-posix \
+        php85-session \
+        php85-simplexml \
+        php85-sodium \
+        php85-tokenizer \
+        php85-xml \
+        php85-zip \
+    && apk add --no-cache --virtual .build npm \
+    && rm -f /etc/nginx/http.d/*.conf
+
+# Composer (phar PHP; corre con php85 vía /usr/bin/php).
+COPY --from=docker.io/composer:2 /usr/bin/composer /usr/local/bin/composer
+
+# -----------------------------------------------------------------------------
+# Frontend (Vite / Vue 3 / Inertia)
+# -----------------------------------------------------------------------------
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY resources ./resources
+COPY public ./public
+COPY vite.config.js ./
+RUN npm run build \
+    && rm -rf node_modules
+
+# -----------------------------------------------------------------------------
+# Backend (Composer)
+# -----------------------------------------------------------------------------
+COPY composer.json composer.lock ./
+# Instalado contra las extensiones de runtime. Los scripts de Laravel se
+# ejecutan después, cuando la aplicación y su entorno están disponibles
+# (container/config/init.sh).
+RUN composer install \
+    --no-dev \
+    --no-interaction \
+    --no-progress \
+    --no-scripts \
+    --optimize-autoloader \
+    --prefer-dist
+
+COPY --chown=nginx:nginx . .
+
+# Solo usamos PostgreSQL; nunca empaquetar una base sqlite residual.
+RUN rm -f database/database.sqlite
+
+# -----------------------------------------------------------------------------
+# Configuración endurecida (ficheros en container/config/). La frontera de
+# seguridad real (TLS, cabeceras, HSTS, límites por IP) es el vhost del
+# borde nginx-reverse.conf; el nginx interno solo sirve la app en :8080.
+# -----------------------------------------------------------------------------
+COPY container/config/nginx.conf /etc/nginx/nginx.conf
+COPY container/config/php-fpm-main.conf /etc/php85/php-fpm.conf
+COPY container/config/www.conf /etc/php85/php-fpm.d/www.conf
+COPY container/config/php-opcache.ini /etc/php85/conf.d/10-opcache.ini
+COPY container/config/php-security.ini /etc/php85/conf.d/99-midori-security.ini
+COPY container/config/supervisord.conf /etc/supervisord.conf
+COPY container/config/entrypoint.sh /usr/local/bin/midori-entrypoint
+COPY container/config/init.sh /usr/local/bin/midori-init
+COPY container/config/queue-worker.sh /usr/local/bin/midori-queue-worker
+
+RUN chmod +x \
+        /usr/local/bin/midori-entrypoint \
+        /usr/local/bin/midori-init \
+        /usr/local/bin/midori-queue-worker \
+    && apk del .build \
+    && mkdir -p \
+        bootstrap/cache \
+        public/build \
+        storage/app/private \
+        storage/app/public \
+        storage/framework/cache/data \
+        storage/framework/sessions \
+        storage/framework/testing \
+        storage/framework/views \
+        storage/logs \
+        /var/lib/php/sessions \
+    && ln -sf ../storage/app/public public/storage \
+    && chown -R nginx:nginx bootstrap/cache public/storage storage /var/lib/php/sessions
+
+EXPOSE 8080
+
+ENTRYPOINT ["midori-entrypoint"]
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisord.conf"]

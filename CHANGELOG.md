@@ -9,6 +9,13 @@ y el proyecto usa [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `container/`: rootless Podman Quadlet deployment (alternative to the
+  Docker Compose stack). Hardened Alpine image (nginx + php-fpm +
+  supervisor, disabled shell/process functions, read-only rootfs), a Pod
+  with the app and a dedicated Redis, CPU/RAM limits, and a daily backup
+  timer (`backup.sh`) for the database and any user files in `storage/`.
+  The database role/schema are provisioned on the shared PostgreSQL
+  instance (`arca`) instead of a dedicated container.
 - Device enrollment API under `/api/v1/crypto/enrollments` so a signed-in device
   without keys can request end-to-end encrypted approval from an unlocked
   device; advertised as `crypto.enrollment` in `/capabilities`.

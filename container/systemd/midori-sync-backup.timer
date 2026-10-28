@@ -1,0 +1,10 @@
+[Unit]
+Description=Midori Sync — timer diario de backups
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
