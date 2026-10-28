@@ -53,8 +53,11 @@ install -d -m 700 "${QUADLET_PATH}"
 
 # midori-storage lo escriben en runtime los procesos que corren como
 # "nginx" (uid/gid 100/101): se crea con "podman unshare" para que el
-# propietario sea correcto dentro del namespace de usuario rootless.
-podman unshare install -d -m 700 -o 100 -g 101 "${VOLUMES_PATH}/${STORAGE_VOLUME}"
+# propietario sea correcto dentro del namespace de usuario rootless. Solo
+# la primera vez: el contenedor pasa a ser dueño después, y reintentar el
+# chmod/chown en reejecuciones fallaría con "Operation not permitted".
+[ -d "${VOLUMES_PATH}/${STORAGE_VOLUME}" ] ||
+    podman unshare install -d -m 700 -o 100 -g 101 "${VOLUMES_PATH}/${STORAGE_VOLUME}"
 cat >"${QUADLET_PATH}/${STORAGE_VOLUME}.volume" <<EOF
 [Volume]
 VolumeName=${STORAGE_VOLUME}
@@ -64,7 +67,10 @@ Options=bind,rw
 Copy=false
 EOF
 
-install -d -m 700 "${VOLUMES_PATH}/${REDIS_VOLUME}"
+# Mismo motivo: el entrypoint de redis corre como root, se queda como
+# dueño de /data tras bajar privilegios a su usuario interno.
+[ -d "${VOLUMES_PATH}/${REDIS_VOLUME}" ] ||
+    install -d -m 700 "${VOLUMES_PATH}/${REDIS_VOLUME}"
 cat >"${QUADLET_PATH}/${REDIS_VOLUME}.volume" <<EOF
 [Volume]
 VolumeName=${REDIS_VOLUME}
@@ -166,6 +172,19 @@ APP_KEY="$(grep '^APP_KEY=' "${ENV_FILE}" 2>/dev/null | cut -d= -f2- || true)"
         "SESSION_ENCRYPT=true" \
         "QUEUE_CONNECTION=redis"
 } >"${ENV_FILE}"
+
+# EnvironmentFile= de Podman no expande ${VAR} como sí lo hace phpdotenv
+# (p. ej. AUTHENTIK_REDIRECT_URI=${APP_URL}/auth/callback,
+# MAIL_FROM_NAME="${APP_NAME}"); se resuelven aquí de forma literal contra
+# los valores ya presentes en el propio archivo generado.
+while IFS='=' read -r key value; do
+    value="${value#\"}"
+    value="${value%\"}"
+    [ -n "${value}" ] || continue
+    escaped="$(printf '%s' "${value}" | sed 's/[&\\|]/\\&/g')"
+    sed -i "s|\${${key}}|${escaped}|g" "${ENV_FILE}"
+done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${ENV_FILE}")
+
 chmod 600 "${ENV_FILE}"
 log "Entorno generado en ${ENV_FILE} (0600)."
 
@@ -229,7 +248,7 @@ EOF
 ## ======================================= ##
 ##    Container: App (endurecida, Pod)     ##
 ## ======================================= ##
-cat >"${QUADLET_PATH}/${SERVICE_NAME}.container" <<EOF
+cat >"${QUADLET_PATH}/${SERVICE_NAME}-app.container" <<EOF
 [Unit]
 Wants=${SERVICE_NAME}-redis.service ${ARCA_SERVICE}
 After=${SERVICE_NAME}-redis.service ${ARCA_SERVICE}
