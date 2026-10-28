@@ -79,6 +79,49 @@ class BrowserSyncLoginTest extends TestCase
         $this->assertDatabaseCount('sync_browser_authorizations', 0);
     }
 
+    public function test_mobile_login_binds_the_device_type_before_redeeming_the_pkce_code(): void
+    {
+        $user = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);
+        $verifier = str_repeat('v', 43);
+        $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+        $redirect = 'org.midorinext.android:/midori-sync/callback';
+        $this->getJson('/api/v1/capabilities')->assertOk()
+            ->assertJsonPath('authentication.browser_login.device_types', ['desktop', 'mobile']);
+        $this->actingAs($user)->get('/auth/desktop?'.http_build_query([
+            'state' => str_repeat('s', 43), 'code_challenge' => $challenge,
+            'redirect_uri' => $redirect, 'device_type' => 'mobile',
+        ]))->assertRedirect(route('auth.desktop.confirm'));
+        $this->get('/auth/desktop/confirm')->assertOk()->assertSee('Connect Midori Android');
+        $response = $this->post('/auth/desktop/confirm')->assertRedirect();
+        parse_str(parse_url($response->headers->get('Location'), PHP_URL_QUERY), $parameters);
+        $this->assertStringStartsWith($redirect.'?', $response->headers->get('Location'));
+        $body = ['code' => $parameters['code'], 'code_verifier' => $verifier,
+            'device_name' => 'Huawei integration', 'device_type' => 'desktop'];
+        $result = $this->postJson('/api/v1/auth/browser-token', $body)->assertCreated()
+            ->assertJsonPath('device.type', 'mobile')
+            ->assertJsonPath('identity.subject', $user->authentik_id);
+        $this->withToken($result->json('token'))->getJson('/api/v1/account')->assertOk()
+            ->assertJsonPath('device.type', 'mobile');
+        $this->postJson('/api/v1/auth/browser-token', $body)->assertNotFound();
+    }
+
+    public function test_mobile_callback_is_exact_and_cannot_authorize_a_desktop_grant(): void
+    {
+        $user = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);
+        foreach ([['org.midorinext.android:/midori-sync/callback', 'desktop'],
+            ['http://127.0.0.1:41831/midori-sync/callback', 'mobile'],
+            ['org.midorinext.android://attacker/midori-sync/callback', 'mobile'],
+            ['org.midorinext.android:/midori-sync/callback?injected=1', 'mobile'],
+            ['org.midorinext.android:/midori-sync/callback/extra', 'mobile']] as [$redirect, $type]) {
+            $this->actingAs($user)->get('/auth/desktop?'.http_build_query([
+                'state' => str_repeat('s', 43), 'code_challenge' => str_repeat('c', 43),
+                'redirect_uri' => $redirect, 'device_type' => $type,
+            ]))->assertStatus(422);
+        }
+        $this->assertDatabaseCount('sync_browser_authorizations', 0);
+        $this->assertDatabaseCount('devices', 0);
+    }
+
     public function test_interactive_login_has_time_for_mfa_and_expired_requests_cannot_authorize(): void
     {
         $user = User::factory()->create(['authentik_issuer' => config('services.authentik.issuer')]);

@@ -2952,6 +2952,19 @@
                     "properties": {
                       "version": {
                         "const": 1
+                      },
+                      "device_types": {
+                        "type": "array",
+                        "items": {
+                          "enum": [
+                            "desktop",
+                            "mobile"
+                          ]
+                        },
+                        "uniqueItems": true,
+                        "minItems": 1,
+                        "maxItems": 2,
+                        "description": "Supported browser authorization device types. Omission means desktop only. The type is bound to the grant at authorization time."
                       }
                     },
                     "required": [

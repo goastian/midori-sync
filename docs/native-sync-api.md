@@ -14,6 +14,14 @@ report records source hashes, native/UI regressions and the intentionally deferr
 These results do not certify staging, a Mobile binary or other desktop platforms.
 
 
+Android integration (2026-10-28): browser authorization accepts `device_type=mobile`
+with the exact redirect `org.midorinext.android:/midori-sync/callback`. The
+`browser_login.device_types` capability advertises `desktop` and `mobile`; omission
+means desktop only. The device type is stored with the authorization grant and
+cannot be changed when redeeming it. Existing Desktop authorization remains
+compatible. Apply the additive browser-authorization migration before enabling
+the mobile login flow. Both clients still share the account identity and streams.
+
 Status: initial implementation with local PostgreSQL runtime and concurrency coverage.
 `GET /api/v1/capabilities` deliberately returns `native_ready: false` until the
 remaining native protocol and migration gates are met. This is not a release

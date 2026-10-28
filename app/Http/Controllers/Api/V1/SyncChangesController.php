@@ -32,7 +32,7 @@ class SyncChangesController extends Controller
                 'development' => $identity->isDevelopment(),
                 'issuer' => $identity->configuredIssuer(),
                 'oidc' => $nativeOidc === null ? null : ['version' => 1] + $nativeOidc,
-                'browser_login' => $browser->available() ? ['version' => 1] : null,
+                'browser_login' => $browser->available() ? ['version' => 1, 'device_types' => ['desktop', 'mobile']] : null,
                 'refresh' => [
                     'version' => 1,
                     'request_bytes' => SyncRefreshService::MAX_REQUEST_BYTES,

@@ -25,8 +25,11 @@ class SyncBrowserAuthorizationService
         return true;
     }
 
-    public function issue(User $user, string $challenge): string
+    public function issue(User $user, string $challenge, string $deviceType = 'desktop'): string
     {
+        if (! in_array($deviceType, ['desktop', 'mobile'], true)) {
+            throw new SyncProtocolException('invalid_device_type', 422);
+        }
         if (! $this->available()) {
             throw new SyncProtocolException('browser_login_unavailable', 503);
         }
@@ -36,6 +39,7 @@ class SyncBrowserAuthorizationService
             'code_hash' => hash('sha256', $code),
             'user_id' => $user->id,
             'challenge' => $challenge,
+            'device_type' => $deviceType,
             'expires_at' => now()->addMinutes(3),
             'created_at' => now(),
         ]);
@@ -62,7 +66,7 @@ class SyncBrowserAuthorizationService
             $device = $user->devices()->create([
                 'device_id' => (string) Str::uuid(),
                 'name' => $deviceName,
-                'type' => 'desktop',
+                'type' => $authorization->device_type,
             ]);
             $session = $this->auth->createSessionToken($user, $device->id, $ip, $userAgent, 2, true);
             DB::table('sync_browser_authorizations')->where('code_hash', $hash)->delete();
