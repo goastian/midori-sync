@@ -1,0 +1,8 @@
+[Unit]
+Description=Midori Sync — backup periódico (PostgreSQL + storage/ si aplica)
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=__BACKUP_SCRIPT__
+TimeoutStartSec=900

@@ -1,0 +1,66 @@
+# Midori Sync — .containerignore (equivalente al .dockerignore de docker).
+
+# Carpeta de despliegue: nunca dentro de la imagen, salvo container/config/
+# (el containerfile la copia explícitamente).
+container/*
+!container/config/
+!container/config/**
+
+# Control de versiones y herramientas
+.git
+.github
+.gitignore
+.gitattributes
+.editorconfig
+.idea
+.vscode
+.zed
+.fleet
+.nova
+
+# Configuración y secretos: nunca dentro de la imagen
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.secret
+
+# Backups, volcados y artefactos de auditoría
+.backup
+*.dump
+*.dump.part
+*.sql
+*.tar
+*.tar.gz
+*.tar.gz.part
+backup.log
+artifacts/
+
+# Artefactos del proyecto que no se copian a la imagen (deploy Docker
+# paralelo, documentación, pruebas)
+Dockerfile
+docker-compose.yml
+docker/
+docs/
+tests/
+phpunit.xml
+README.md
+CHANGELOG.md
+SECURITY.md
+security-report.md
+
+# Herramientas de desarrollo/auditoría (usan proc_open, desactivado en
+# runtime por container/config/php-security.ini).
+scripts/
+
+# Dependencias y artefactos regenerables en build
+node_modules
+vendor
+public/build
+public/hot
+public/storage
+
+# Almacenamiento y caché (se crean en build y se montan en runtime)
+storage/**
+bootstrap/cache/**
