@@ -1,0 +1,10 @@
+[Unit]
+Description=Midori Sync — timer cada minuto para artisan schedule:run
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

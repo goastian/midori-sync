@@ -286,8 +286,21 @@ sed "s|__BACKUP_SCRIPT__|${CONTAINER_DIR}/backup.sh|g" \
     >"${SYSTEMD_USER_PATH}/${SERVICE_NAME}-backup.service"
 install -m 644 "${CONTAINER_DIR}/systemd/${SERVICE_NAME}-backup.timer" \
     "${SYSTEMD_USER_PATH}/${SERVICE_NAME}-backup.timer"
+
+## ======================================= ##
+##    Scheduler de Laravel (host, timer)    ##
+## ======================================= ##
+# "schedule:run" no corre dentro del contenedor (necesita proc_open,
+# deshabilitado por el hardening shell-less); lo invoca este timer cada
+# minuto desde el host vía "podman exec".
+install -m 644 "${CONTAINER_DIR}/systemd/${SERVICE_NAME}-scheduler.service" \
+    "${SYSTEMD_USER_PATH}/${SERVICE_NAME}-scheduler.service"
+install -m 644 "${CONTAINER_DIR}/systemd/${SERVICE_NAME}-scheduler.timer" \
+    "${SYSTEMD_USER_PATH}/${SERVICE_NAME}-scheduler.timer"
+
 systemctl --user daemon-reload
 systemctl --user enable --now "${SERVICE_NAME}-backup.timer"
+systemctl --user enable --now "${SERVICE_NAME}-scheduler.timer"
 
 log "Quadlet generado en ${QUADLET_PATH}"
 printf '\nFalta conectar el Pod a arca (ejecutar como el mismo usuario):\n'
