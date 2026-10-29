@@ -32,8 +32,7 @@ onBeforeUnmount(() => {
         <h1 class="text-3xl font-semibold text-gray-900 dark:text-gray-100">Your synchronized content</h1>
         <p class="mt-4 text-sm text-gray-700 dark:text-gray-300">
             Midori encrypts your data on your devices, so only the totals are shown here.
-            Lost your recovery code?
-            <Link href="/settings" class="font-medium text-primary-600 dark:text-primary-400 hover:underline">Reset your synced data</Link>
+            Sign in with Astian Account on your devices to connect them automatically.
         </p>
 
         <Link href="/devices?connect=android" class="mt-6 inline-flex rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Connect Android</Link>

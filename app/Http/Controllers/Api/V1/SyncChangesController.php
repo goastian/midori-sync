@@ -45,7 +45,7 @@ class SyncChangesController extends Controller
             'operations_version' => 1,
             'crypto_state_version' => 1,
             'crypto_custody_version' => 1,
-            'crypto' => ['enrollment' => true, 'reset' => true, 'password_unlock_version' => 1],
+            'crypto' => ['enrollment' => true, 'reset' => true, 'password_unlock_version' => 1, 'account_recovery_version' => 1],
             'record_schema_versions' => [1, 2],
             'client_recovery' => ['version' => 1, 'rotation_version' => 1, 'registry_auth_version' => 2, 'authenticated_controls' => true,
                 'compaction_version' => 1, 'history_reconciliation_version' => 1],

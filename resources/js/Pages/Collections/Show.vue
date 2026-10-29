@@ -57,7 +57,7 @@ function deleteAll() {
         </div>
 
         <p class="text-sm text-gray-500 dark:text-gray-400">
-            This data is end-to-end encrypted. Open Midori on your device to see and manage its contents.
+            This content is encrypted. Open Midori on your device to see and manage it.
         </p>
     </AppLayout>
 </template>

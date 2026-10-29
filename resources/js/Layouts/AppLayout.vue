@@ -80,7 +80,7 @@ const navigation = [
         </main>
 
         <footer class="border-t border-gray-200 dark:border-gray-800 py-6 text-center text-xs text-gray-500 dark:text-gray-400">
-            Your data is end-to-end encrypted with a key that never leaves your devices.
+            Your devices encrypt your data. Astian Account manages encrypted key recovery.
         </footer>
     </div>
 </template>

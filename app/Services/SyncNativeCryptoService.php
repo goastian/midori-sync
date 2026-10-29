@@ -20,7 +20,7 @@ class SyncNativeCryptoService
 
     public const MAX_REVISION = 2147483647;
 
-    public function __construct(private SyncChangeJournal $journal, private SyncIdentityService $identity, private SyncNativeEnvelope $envelope) {}
+    public function __construct(private SyncChangeJournal $journal, private SyncIdentityService $identity, private SyncNativeEnvelope $envelope, private SyncAccountRecovery $accountRecovery) {}
 
     public function snapshot(int $userId, string $sessionId): array
     {
@@ -32,13 +32,13 @@ class SyncNativeCryptoService
         }, 5);
     }
 
-    public function activate(int $userId, array $context, string $keyId, string $bundle, bool $revokeIncompatible, ?array $identityKey = null, string $registryAuth = '', int $registryAuthVersion = 1): array
+    public function activate(int $userId, array $context, string $keyId, string $bundle, bool $revokeIncompatible, ?array $identityKey = null, string $registryAuth = '', int $registryAuthVersion = 1, ?array $accountCapsule = null): array
     {
         $this->envelope->validateBundle($keyId, $bundle);
         $this->validateIdentityKey($identityKey, [$keyId]);
         $this->validateRegistryAuth($registryAuth);
 
-        return DB::transaction(function () use ($userId, $context, $keyId, $bundle, $revokeIncompatible, $identityKey, $registryAuth, $registryAuthVersion) {
+        return DB::transaction(function () use ($userId, $context, $keyId, $bundle, $revokeIncompatible, $identityKey, $registryAuth, $registryAuthVersion, $accountCapsule) {
             $this->journal->lockUser($userId);
             $this->requireSession($userId, $context['session_id']);
             $state = $this->state($userId);
@@ -65,6 +65,9 @@ class SyncNativeCryptoService
                 'identity_bundle' => $identityKey['encrypted_bundle'],
                 'registry_auth' => $registryAuth, 'registry_auth_version' => $registryAuthVersion,
             ]);
+            if ($accountCapsule !== null) {
+                $this->accountRecovery->store($userId, $this->state($userId), $accountCapsule);
+            }
 
             return $this->format($this->state($userId));
         }, 5);
@@ -73,6 +76,25 @@ class SyncNativeCryptoService
     public function recoverySecret(int $userId, string $sessionId): array
     {
         throw new SyncProtocolException('server_recovery_disabled', 409);
+    }
+
+    public function accountRecovery(int $userId, string $sessionId): array
+    {
+        return DB::transaction(function () use ($userId, $sessionId) {
+            $this->journal->lockUser($userId);
+            $this->requireSession($userId, $sessionId);
+
+            return $this->accountRecovery->read($userId, $this->state($userId));
+        }, 5);
+    }
+
+    public function saveAccountRecovery(int $userId, array $context, array $capsule): void
+    {
+        DB::transaction(function () use ($userId, $context, $capsule) {
+            $this->journal->lockUser($userId);
+            $state = $this->authorizeWrite($userId, $context);
+            $this->accountRecovery->store($userId, $state, $capsule);
+        }, 5);
     }
 
     public function passwordBackup(int $userId, string $sessionId): array
@@ -153,7 +175,7 @@ class SyncNativeCryptoService
         }, 5);
     }
 
-    public function startRotation(int $userId, array $context, string $operationId, string $keyId, string $bundle, array $keys, array $identityKey, string $registryAuth, int $registryAuthVersion = 1): array
+    public function startRotation(int $userId, array $context, string $operationId, string $keyId, string $bundle, array $keys, array $identityKey, string $registryAuth, int $registryAuthVersion = 1, ?array $accountCapsule = null): array
     {
         $this->envelope->validateBundle($keyId, $bundle);
         $this->validateRegistryAuth($registryAuth);
@@ -165,7 +187,7 @@ class SyncNativeCryptoService
         }
         $fingerprint = hash('sha256', json_encode($fingerprintParts, JSON_THROW_ON_ERROR));
 
-        return DB::transaction(function () use ($userId, $context, $operationId, $keyId, $bundle, $keys, $identityKey, $fingerprint, $registryAuth, $registryAuthVersion) {
+        return DB::transaction(function () use ($userId, $context, $operationId, $keyId, $bundle, $keys, $identityKey, $fingerprint, $registryAuth, $registryAuthVersion, $accountCapsule) {
             $this->journal->lockUser($userId);
             $this->requireSession($userId, $context['session_id']);
             $state = $this->state($userId);
@@ -217,6 +239,9 @@ class SyncNativeCryptoService
                 'source_key_ids' => json_encode($existing, JSON_THROW_ON_ERROR), 'phase' => 'rewriting',
                 'created_at' => now(), 'updated_at' => now(),
             ]);
+            if ($accountCapsule !== null) {
+                $this->accountRecovery->store($userId, $this->state($userId), $accountCapsule);
+            }
 
             return $this->format($this->state($userId));
         }, 5);
@@ -252,11 +277,11 @@ class SyncNativeCryptoService
         }, 5);
     }
 
-    public function retireKey(int $userId, array $context, string $keyId, string $registryAuth, int $registryAuthVersion = 1): array
+    public function retireKey(int $userId, array $context, string $keyId, string $registryAuth, int $registryAuthVersion = 1, ?array $accountCapsule = null): array
     {
         $this->validateRegistryAuth($registryAuth);
 
-        return DB::transaction(function () use ($userId, $context, $keyId, $registryAuth, $registryAuthVersion) {
+        return DB::transaction(function () use ($userId, $context, $keyId, $registryAuth, $registryAuthVersion, $accountCapsule) {
             $this->journal->lockUser($userId);
             $state = $this->authorizeWrite($userId, $context);
             $this->requireRegistryVersion($state, $registryAuthVersion);
@@ -280,6 +305,9 @@ class SyncNativeCryptoService
             }
             $key->delete();
             DB::table('sync_crypto_states')->where('user_id', $userId)->update(['revision' => $state->revision + 1, 'registry_auth' => $registryAuth, 'registry_auth_version' => $registryAuthVersion]);
+            if ($accountCapsule !== null) {
+                $this->accountRecovery->store($userId, $this->state($userId), $accountCapsule);
+            }
 
             return $this->format($this->state($userId));
         }, 5);
@@ -466,6 +494,7 @@ class SyncNativeCryptoService
         DB::table('sync_native_keys')->where('user_id', $userId)->delete();
         DB::table('sync_device_enrollments')->where('user_id', $userId)->delete();
         DB::table('sync_password_backups')->where('user_id', $userId)->delete();
+        DB::table('sync_account_recovery')->where('user_id', $userId)->delete();
         DB::table('sync_crypto_states')->where('user_id', $userId)->update([
             'epoch' => (string) Str::uuid(), 'revision' => 0, 'active_key_id' => null,
             'legacy_frozen' => false, 'legacy_fingerprint' => null,
@@ -551,6 +580,7 @@ class SyncNativeCryptoService
             'mode' => $state->native_enabled ? 'native' : 'legacy', 'active_key_id' => $state->active_key_id,
             'custody' => $state->custody,
             'password_unlock' => $this->currentPasswordBackup($state)->exists(),
+            'account_recovery' => $this->accountRecovery->available($state),
             'registry_auth' => $state->registry_auth, 'registry_auth_version' => (int) $state->registry_auth_version,
             'identity_key' => $state->identity_key_id === null ? null : [
                 'key_id' => $state->identity_key_id, 'encrypted_bundle' => $state->identity_bundle,

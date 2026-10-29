@@ -6,7 +6,7 @@ defineProps({
 });
 
 const features = [
-    { title: 'End-to-End Encryption', desc: 'XChaCha20-Poly1305 encryption ensures only you can read your data.' },
+    { title: 'Account-Protected Encryption', desc: 'Your devices encrypt your data. Astian Account restores access when you sign in on a new device.' },
     { title: 'Cross-Device Sync', desc: 'Bookmarks, history, tabs, and settings — everywhere.' },
     { title: 'Self-Hosted', desc: 'Your server, your data. No third-party dependencies.' },
     { title: 'Midori Native', desc: 'Deep integration with Midori Tab and Midori Privacy.' },
@@ -43,7 +43,7 @@ const features = [
                 Sync your browser,<br>on your terms
             </h1>
             <p class="text-lg text-gray-500 max-w-xl mx-auto mb-8">
-                A self-hosted, end-to-end encrypted sync service for Midori and Firefox.
+                An encrypted sync service for Midori, with automatic recovery through Astian Account.
                 Your data stays yours.
             </p>
             <a
