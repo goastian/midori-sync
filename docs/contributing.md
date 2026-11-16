@@ -18,7 +18,7 @@ or security vulnerabilities: see `SECURITY.md` at the repository root.
 
 ### Requirements
 
-- PHP 8.3+
+- PHP 8.5 (the shipped Symfony lockfile requires at least PHP 8.4.1)
 - Composer 2
 - Node.js 20+
 - Docker + Docker Compose (recommended for PostgreSQL 17 + Redis 7)

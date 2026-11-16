@@ -12,6 +12,7 @@ php artisan package:discover --ansi
 php artisan migrate --force
 php artisan storage:link || test -L public/storage
 php artisan config:cache
+php artisan route:clear
 php artisan event:cache
 php artisan view:cache
 

@@ -39,7 +39,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: '8.5'
           extensions: mbstring, intl, pdo_pgsql, pgsql, pcntl, sodium
           coverage: none
           tools: composer:v2
@@ -53,6 +53,9 @@ jobs:
 
       - name: Install dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Check platform requirements
+        run: composer check-platform-reqs --no-interaction
 
       - name: Prepare environment
         run: |
@@ -70,7 +73,7 @@ jobs:
         run: php artisan test
 
       - name: composer audit
-        run: composer audit --no-interaction --abandoned=report
+        run: composer audit --locked --no-interaction --abandoned=report
 
   js:
     name: JS — dashboard build + audit

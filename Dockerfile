@@ -3,7 +3,7 @@ FROM node:22-alpine AS frontend
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit
-COPY vite.config.js tailwind.config.js ./
+COPY vite.config.js ./
 COPY resources/ resources/
 RUN npm run build
 
@@ -16,7 +16,7 @@ COPY . .
 RUN composer dump-autoload --optimize
 
 # ---- Stage 3: Production image ----
-FROM php:8.3-fpm-alpine
+FROM php:8.5-fpm-alpine
 
 # Install system dependencies
 RUN apk add --no-cache \

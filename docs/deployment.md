@@ -6,6 +6,10 @@
 - An [Authentik](https://goauthentik.io/) instance for OAuth2/OIDC authentication
 - A domain name with HTTPS (for production)
 
+The supplied images and CI use PHP 8.5. The locked Symfony 8.1 components need
+PHP 8.4.1 or newer; PHP 8.3 cannot run this lockfile even though Laravel itself
+allows it. Run `composer check-platform-reqs` against the deployment runtime.
+
 The default HTTP container port binds only to `127.0.0.1`. Use it for local
 integration or behind a TLS reverse proxy. HTTPS is required outside loopback;
 changing `APP_BIND_IP` to a public interface does not enable TLS. Set
@@ -297,6 +301,45 @@ Cloudflare in front, use the Cloudflare configuration above rather than
 forwarding Cloudflare's peer address as the visitor.
 
 ## Maintenance
+
+### PHP dependency security updates
+
+The 2026-11-15 update changes only six packages, within the existing
+`composer.json` constraints:
+
+| Package | Previous lock | Updated lock |
+| --- | --- | --- |
+| `laravel/framework` | 13.39.0 | 13.42.0 |
+| `phpseclib/phpseclib` | 4.0.2 | 4.0.3 |
+| `symfony/http-foundation` | 8.1.9 | 8.1.11 |
+| `symfony/http-kernel` | 8.1.9 | 8.1.11 |
+| `symfony/mime` | 8.1.7 | 8.1.10 |
+| `symfony/routing` | 8.1.9 | 8.1.11 |
+
+Rebuild the image from `composer.lock`, recreate the application container, and
+restart all long-lived PHP workers so none retain the old code or OPcache.
+The Docker build context excludes local `vendor/`, `.env` and cached framework
+files; a stale host vendor tree must never overwrite the installed dependencies.
+The hardened image already excludes those files through `container/.containerignore`.
+
+Clear compiled routes after installing the new dependencies: Symfony's Routing
+fix changes generated matchers, so an old route cache retains the vulnerable
+matcher. `container/config/init.sh` runs `php artisan route:clear` on startup.
+For other deployments, run it explicitly before serving traffic. If using route
+caching, regenerate with `php artisan route:cache` under the updated dependencies.
+Rebuild `config:cache` with the deployment environment, including
+`SYNC_TRUSTED_PROXIES`, and verify both the lockfile and installed packages:
+
+```bash
+composer validate --strict
+composer check-platform-reqs
+composer audit --locked
+composer audit
+```
+
+Both audits must report no known advisories. Do not use `--ignore-platform-reqs`
+or disable advisory blocking to make installation succeed. The routing cache
+requirement comes from the [Symfony Routing advisory](https://symfony.com/cve-2026-118516).
 
 ### Scheduled Tasks (automatic via Supervisor)
 
