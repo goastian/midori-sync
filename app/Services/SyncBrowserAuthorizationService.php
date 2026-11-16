@@ -9,6 +9,8 @@ use Illuminate\Support\Str;
 
 class SyncBrowserAuthorizationService
 {
+    public const CONSENT_VERSION = 2;
+
     public function __construct(private SyncAuthService $auth, private SyncIdentityService $identity) {}
 
     public function available(): bool
@@ -40,11 +42,21 @@ class SyncBrowserAuthorizationService
             'user_id' => $user->id,
             'challenge' => $challenge,
             'device_type' => $deviceType,
+            'consent_version' => self::CONSENT_VERSION,
             'expires_at' => now()->addMinutes(3),
             'created_at' => now(),
         ]);
 
         return $code;
+    }
+
+    public function verificationCode(string $state, string $challenge, string $redirectUri, string $deviceType): string
+    {
+        $binding = json_encode(['MidoriSync/browser-consent/v2', $state, $challenge, $redirectUri, $deviceType],
+            JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        $code = strtoupper(substr(hash('sha256', $binding), 0, 10));
+
+        return substr($code, 0, 5).'-'.substr($code, 5);
     }
 
     public function redeem(string $code, string $verifier, string $deviceName, ?string $ip, ?string $userAgent): array
@@ -57,6 +69,7 @@ class SyncBrowserAuthorizationService
         return DB::transaction(function () use ($code, $challenge, $deviceName, $ip, $userAgent) {
             $hash = hash('sha256', $code);
             $authorization = DB::table('sync_browser_authorizations')->where('code_hash', $hash)
+                ->where('consent_version', self::CONSENT_VERSION)
                 ->where('expires_at', '>', now())->lockForUpdate()->first();
             if (! $authorization || ! hash_equals($authorization->challenge, $challenge)) {
                 throw new SyncProtocolException('invalid_browser_authorization', 404);

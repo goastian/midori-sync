@@ -69,7 +69,7 @@ SYNC_DEFAULT_QUOTA=104857600
 SYNC_RATE_LIMIT=60
 ```
 
-Desktop sign-in uses the existing confidential web client. Set `AUTHENTIK_CLIENT_ID`, `AUTHENTIK_CLIENT_SECRET`, `AUTHENTIK_BASE_URL`, `AUTHENTIK_ISSUER`, and `AUTHENTIK_REDIRECT_URI` as for the dashboard. Deploy the `sync_browser_authorizations` migration. After Authentik login, the user approves the Desktop connection in Midori Sync; a single-use, PKCE-bound authorization returns to the browser through loopback. No code is copied by the user, and the client secret stays on the server. Leave `AUTHENTIK_NATIVE_CLIENT_ID` and `AUTHENTIK_NATIVE_DISCOVERY_URL` empty unless the optional direct public OIDC flow is also configured.
+Desktop sign-in uses the existing confidential web client. Set `AUTHENTIK_CLIENT_ID`, `AUTHENTIK_CLIENT_SECRET`, `AUTHENTIK_BASE_URL`, `AUTHENTIK_ISSUER`, and `AUTHENTIK_REDIRECT_URI` as for the dashboard. Deploy the `sync_browser_authorizations` migration. After Authentik login, the user approves the Desktop connection in Midori Sync; a single-use, PKCE-bound authorization returns to the browser through loopback. The user must enter the connection code shown in the native app on the web consent page before any authorization is issued; the client secret stays on the server. Leave `AUTHENTIK_NATIVE_CLIENT_ID` and `AUTHENTIK_NATIVE_DISCOVERY_URL` empty unless the optional direct public OIDC flow is also configured.
 
 Compose requires `AUTHENTIK_ISSUER` and forwards the authentication variables to the app container. Setting a value in the host's `.env` is insufficient unless the container receives it. Use the exact `issuer` from the application's `/.well-known/openid-configuration` document, including its trailing slash. Do not infer it from `AUTHENTIK_BASE_URL`: Authentik supports both shared and per-application issuers.
 
@@ -99,7 +99,9 @@ docker compose exec app php artisan sync:check-auth
 curl --fail --silent --show-error https://sync.yourdomain.com/api/v1/capabilities
 ```
 
-`sync:check-auth` validates the effective Laravel configuration without contacting Authentik or exposing credentials. It must report a configured issuer and at least one enabled Desktop login flow. The public capabilities response must contain that same `authentication.issuer` and `authentication.browser_login.version: 1` for the existing web client. `native_ready` is unrelated to login availability.
+`sync:check-auth` validates the effective Laravel configuration without contacting Authentik or exposing credentials. It must report a configured issuer and at least one enabled Desktop login flow. The public capabilities response must contain that same `authentication.issuer` and `authentication.browser_login.version: 2` for the existing web client. `native_ready` is unrelated to login availability.
+
+Browser consent version 2 requires the additive `2026_11_15_000001_add_browser_authorization_consent_version` migration and updated Desktop/Android clients. Restart all old backend workers when deploying it; older clients and pending version 1 grants are rejected. Existing linked sessions remain valid. See [browser connection consent](native-sync-api.md#browser-connection-consent-version-2-2026-11-15) for the rollout and verification-code contract.
 
 If Desktop displays "Direct account sign-in is not configured on this Sync server", inspect the public response first. An `issuer: null` with `browser_login: null` and `oidc: null` means the backend cannot authorize Desktop. `/auth/redirect` can still work in this state; `/auth/desktop` returns 503. Configure the server environment rather than overriding detection in Desktop.
 

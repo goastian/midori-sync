@@ -2987,7 +2987,7 @@
                     "type": "object",
                     "properties": {
                       "version": {
-                        "const": 1
+                        "const": 2
                       },
                       "device_types": {
                         "type": "array",
@@ -3005,7 +3005,8 @@
                     },
                     "required": [
                       "version"
-                    ]
+                    ],
+                    "description": "Requires native connection-code entry on the web consent screen before issuing a PKCE authorization. Clients must support browser consent version 2."
                   },
                   {
                     "type": "null"

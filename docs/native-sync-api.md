@@ -29,6 +29,57 @@ announcement. PostgreSQL is the database for deployment, isolated development
 and integration tests. Artisan manages database preparation, migrations and
 synthetic accounts through `sync:dev`.
 
+## Browser connection consent version 2 (2026-11-15)
+
+This version supersedes the earlier browser-authorization behavior. Capabilities
+advertise `authentication.browser_login.version: 2`. Updated Desktop and Android
+require that version and send `consent_version=2` to `/auth/desktop`. Requests
+without it receive 426 and cannot start a browser authorization. Apply
+`2026_11_15_000001_add_browser_authorization_consent_version` before deploying the
+backend, and release updated clients with it. Existing linked sessions do not
+need to be renewed solely for this change. Restart all old backend workers.
+
+After the web identity is authenticated, `GET /auth/desktop/confirm` renders
+consent without issuing a grant. The native app displays a connection code
+before opening that page. The user enters that native code on the web page,
+which identifies the account, device type and expiry. The page never supplies
+the expected code to copy from itself. Consent requires a CSRF-protected POST,
+an explicit approval decision and the current form's random request ID. An old
+form cannot authorize a replacement request. Five incorrect entries invalidate
+the pending request. Cancellation returns only `state` and `error=access_denied`.
+Pending requests expire after ten minutes; approved grants remain single-use,
+PKCE-bound, and expire after three minutes.
+
+The interoperable display code is the first ten uppercase hexadecimal digits
+of SHA-256 over the UTF-8 encoding of this compact JSON array, with literal
+slashes and no whitespace, displayed as `XXXXX-XXXXX`:
+
+```json
+["MidoriSync/browser-consent/v2","state","code_challenge","redirect_uri","device_type"]
+```
+
+The values in the array are the actual validated request values, not the field
+names shown above. `tests/Fixtures/browser-consent-v2.json` supplies shared
+Desktop/Android/server vectors. The display code is a human binding check, not
+a secret or proof of a native executable's identity. PKCE still supplies proof
+of possession. It prevents approving an unrelated request while using the code
+from the genuine app; it cannot attest an uncompromised OS or protect a user
+who follows an attacker's code or fabricated native UI.
+
+Grant rows carry `consent_version=2`. The migration gives pre-upgrade rows
+version 1; redemption rejects them even if their PKCE proof is correct and
+their previous expiry has not passed. Older pending browser sessions are also
+rejected. There is no silent fallback to the previous approval flow.
+
+QR pairing remains a separate, authenticated-web-issued single-use bearer code.
+The Devices page now requires an explicit "Show QR code" action and displays a
+confirmation fingerprint. Android previews the same fingerprint and redeems
+only after the user confirms a match. This fingerprint uses the same display
+format over `['MidoriSync/pairing-consent/v1', normalized_server_url, pairing_token]`
+encoded as the compact JSON array above. The server URL includes its trailing
+slash. The domains prevent mixing browser and QR confirmation codes. Users must
+generate QR codes inside their own account and must not share the QR image.
+
 The machine-readable [OpenAPI 3.1 contract](native-sync.openapi.json) describes
 the implemented native-client profile, including session revocation, request
 and response schemas, per-operation outcomes, byte limits and reset behavior.

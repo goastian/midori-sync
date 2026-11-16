@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onUnmounted, ref } from 'vue';
 import { router } from '@inertiajs/vue3';
 import axios from 'axios';
 import AppLayout from '@/Layouts/AppLayout.vue';
@@ -16,6 +16,7 @@ const editingError = ref('');
 const nameInput = ref(null);
 const pairingCode = ref('');
 const pairingQr = ref('');
+const pairingVerification = ref('');
 const secondsRemaining = ref(0);
 const pairingLoading = ref(false);
 const pairingError = ref('');
@@ -36,6 +37,7 @@ async function generatePairingCode() {
     pairingError.value = '';
     pairingCode.value = '';
     pairingQr.value = '';
+    pairingVerification.value = '';
     copied.value = false;
     stopPairingTimer();
     try {
@@ -43,6 +45,10 @@ async function generatePairingCode() {
         const pairingUrl = new URL('/pair', window.location.origin);
         pairingUrl.hash = `token=${data.pairing_token}`;
         const image = await QRCode.toDataURL(pairingUrl.href, { width: 280, margin: 4, errorCorrectionLevel: 'M' });
+        const binding = JSON.stringify(['MidoriSync/pairing-consent/v1', new URL('/', window.location.origin).href, data.pairing_token]);
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(binding)));
+        const verification = Array.from(digest.slice(0, 5), byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
+        pairingVerification.value = `${verification.slice(0, 5)}-${verification.slice(5)}`;
         pairingCode.value = data.pairing_token;
         pairingQr.value = image;
         const expiresAt = Date.now() + data.expires_in * 1000;
@@ -52,6 +58,7 @@ async function generatePairingCode() {
             if (secondsRemaining.value === 0) {
                 pairingCode.value = '';
                 pairingQr.value = '';
+                pairingVerification.value = '';
                 pairingError.value = 'This QR code expired. Show a new QR code to continue.';
                 stopPairingTimer();
             }
@@ -86,9 +93,6 @@ async function copyPairingCode() {
 }
 
 onUnmounted(stopPairingTimer);
-onMounted(() => {
-    if (new URLSearchParams(window.location.search).get('connect') === 'android') generatePairingCode();
-});
 
 function formatTime(ts) {
     if (!ts) return 'Never';
@@ -150,6 +154,9 @@ function saveEdit(device) {
             </p>
             <div v-if="pairingQr" class="mt-4">
                 <img :src="pairingQr" alt="Scan this QR code with Midori Android to connect your account" width="280" height="280" class="max-w-full" />
+                <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">Confirm that Midori Android shows this code before connecting:</p>
+                <p class="font-mono text-xl font-semibold tracking-wider" aria-label="Connection verification code">{{ pairingVerification }}</p>
+                <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">Only connect your own device. Never send this QR code to someone else.</p>
                 <p class="mt-2 text-sm text-gray-600 dark:text-gray-400" role="status">Expires in {{ timeRemaining }}. This QR code works once.</p>
             </div>
             <div v-if="developmentPairing && pairingCode" class="mt-4">
