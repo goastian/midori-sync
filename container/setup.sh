@@ -120,7 +120,11 @@ Network=${SERVICE_NAME}.network
 # Network
 ExitPolicy=stop
 PublishPort=${PUBLISH_ADDR}:${PUBLISH_PORT}:${CONTAINER_PORT}
-PodmanArgs=--cpus=2 --memory=2g
+# Subido de 2.0 a 3.5 cpus / 2g a 2816m (2026-10-30) para soportar
+# >50 usuarios concurrentes (app=3.2+redis=0.3 cpu, app=2304m+redis=256m
+# mem, +256m de margen). Esto SI pide mas cuota real al host de 8 cores
+# compartido con otras apps (ver nota de capacidad en el reporte).
+PodmanArgs=--cpus=3.5 --memory=2816m
 
 [Service]
 Restart=always
@@ -276,9 +280,13 @@ AddCapability=CHOWN,DAC_OVERRIDE,FOWNER,FSETID,SETGID,SETUID
 NoNewPrivileges=true
 
 CgroupsMode=no-conmon
-Memory=1536m
+# Subido tras prueba de estrés (2026-10-30): a 1.8 cpu el pool seguia
+# saturado a partir de ~30 clientes concurrentes. Esta vez SI se pide
+# mas cuota real al host (Pod paso de 2.0 a 3.5 cpus) para soportar
+# >50 usuarios concurrentes reales.
+Memory=2304m
 PidsLimit=512
-PodmanArgs=--cpus=1.5
+PodmanArgs=--cpus=3.2
 
 HealthCmd=curl -fsS http://127.0.0.1:${CONTAINER_PORT}/up
 HealthInterval=30s
