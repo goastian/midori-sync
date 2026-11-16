@@ -2114,6 +2114,42 @@
           }
         }
       }
+    },
+    "/crypto/account-recovery": {
+      "get": {
+        "operationId": "rejectAccountRecoveryDisclosure",
+        "summary": "Reject server-held account recovery",
+        "description": "Always rejects authenticated requests with 409 server_recovery_disabled. No capsule or recovery secret is stored or returned, including on upgraded databases before cleanup. Activation, rotation and retirement reject account_recovery. The removal migration deletes existing capsules.",
+        "deprecated": true,
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "put": {
+        "operationId": "rejectAccountRecoveryStorage",
+        "summary": "Reject server-held account recovery",
+        "description": "Always rejects authenticated requests with 409 server_recovery_disabled. No capsule or recovery secret is stored or returned, including on upgraded databases before cleanup. Activation, rotation and retirement reject account_recovery. The removal migration deletes existing capsules.",
+        "deprecated": true,
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
     }
   },
   "components": {

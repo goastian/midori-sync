@@ -826,3 +826,32 @@ Capabilities advertise `crypto.password_unlock_version: 1`. `CryptoState.passwor
 `GET /crypto/password` returns `{epoch,capsule}` or `409 password_backup_unavailable`, with `Cache-Control: no-store`. Rotation/key retirement invalidates stale capsules; explicit crypto reset deletes them. The envelope must use native v2 `purpose:local`, collection `browser-settings`, ID `sync-password-backup-v1`, generation=crypto epoch, schema 1 and base revision `0`. The password wraps a separate random native key using UTF-8 `MidoriSync/account-password/v1\0` + the exact unnormalized password, with the standard Argon2id/native bundle. The payload protects local wrapping material, current data/identity bundles and an optional known recovery code. Clients verify AEAD, scope, epoch, key IDs and the authenticated registry before saving recovered keys.
 
 OIDC never supplies the password: users enter it locally. Existing accounts need retained local keys or their recovery code to configure the capsule. An Astian password change needs an explicit capsule update from an unlocked profile; an old capsule may still need the previous password. Rewrapping does not revoke historical keys or backups; compromise requires key rotation. Offline guessing and an identity provider that captures the password are part of this mode’s threat model. Desktop/Mobile byte contract and migration: [account password design](../../docs/sync-clave-cuenta.md).
+
+
+## Removal of account recovery escrow (2026-11-15)
+
+`GET` and `PUT /crypto/account-recovery` are retired compatibility endpoints:
+valid native sessions receive `409 server_recovery_disabled`, and invalid sessions
+receive `401`. They never read, accept or disclose recovery capsules, even before
+an upgraded database has run its cleanup migration. Activation, rotation and key
+retirement reject any `account_recovery` field (including null) with `422`, without
+changing keys, revision or data. Capabilities and crypto state no longer advertise
+account recovery.
+
+Migration `2026_11_15_000001_remove_sync_account_recovery.php` drops the old capsule
+table. Rollback does not restore it or its secrets. Deploy the patched server and
+migration together, clear cached routes/configuration and restart long-running
+workers; then update Desktop and Android. Both clients ignore old account-recovery
+advertisements, never send local wrapping secrets and require user-held recovery
+material or device-authorized enrollment. A password capsule remains encrypted
+locally with a user-entered password; the server does not receive that password.
+
+Removing escrow cannot revoke keys disclosed earlier or erase historical backups.
+Before cleanup, preserve access on an unlocked device and save a client recovery
+code. Treat previously escrowed data and identity keys as potentially exposed.
+Re-encrypt data with fresh keys and retire old keys after journal compaction. An
+exposed identity key also needs replacement: use the existing explicit crypto
+reset and re-enroll devices from retained local data; ordinary data-key rotation
+keeps the identity key. Handle old backups according to the incident retention
+policy and ensure restores apply the removal migration before serving requests.
+See the [client migration notes](../../docs/sync-acceso-con-cuenta.md).

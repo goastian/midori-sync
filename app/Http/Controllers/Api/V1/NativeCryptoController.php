@@ -31,13 +31,12 @@ class NativeCryptoController extends Controller
             'custody' => ['sometimes', 'in:client'],
             'registry_auth_version' => ['sometimes', 'integer', 'in:1,2'],
             'registry_auth' => ['required', 'string', 'regex:/^[0-9a-f]{64}$/D'],
-            'account_recovery' => ['sometimes', 'required', 'array'],
         ]);
         $identityKey = $this->identityKey($request);
 
         return $this->response($this->crypto->activate(
             $request->user()->id, $context, $data['key_id'], $data['encrypted_bundle'], $request->boolean('revoke_incompatible'),
-            $identityKey, $options['registry_auth'], (int) ($options['registry_auth_version'] ?? 1), $options['account_recovery'] ?? null,
+            $identityKey, $options['registry_auth'], (int) ($options['registry_auth_version'] ?? 1),
         ));
     }
 
@@ -63,12 +62,11 @@ class NativeCryptoController extends Controller
             'keys.*' => ['required', 'array:key_id,encrypted_bundle'],
             'keys.*.key_id' => ['required', 'string', 'size:22', 'distinct:strict'],
             'keys.*.encrypted_bundle' => ['required', 'string', 'max:2048'],
-            'account_recovery' => ['sometimes', 'required', 'array'],
         ]);
         $bundle = $this->bundle($request);
 
         return $this->response($this->crypto->startRotation($request->user()->id, $context, $data['operation_id'],
-            $bundle['key_id'], $bundle['encrypted_bundle'], $data['keys'], $this->identityKey($request), $data['registry_auth'], (int) ($data['registry_auth_version'] ?? 1), $data['account_recovery'] ?? null));
+            $bundle['key_id'], $bundle['encrypted_bundle'], $data['keys'], $this->identityKey($request), $data['registry_auth'], (int) ($data['registry_auth_version'] ?? 1)));
     }
 
     public function completeRotation(Request $request): JsonResponse
@@ -98,6 +96,8 @@ class NativeCryptoController extends Controller
             throw new SyncProtocolException('request_too_large', 413);
         }
         $data = $request->validate([
+            'account_recovery' => ['missing'],
+            'recovery_secret' => ['missing'],
             'crypto' => ['required', 'array:epoch,revision'],
             'crypto.epoch' => ['required', 'uuid'],
             'crypto.revision' => ['required', 'string', 'regex:/^(0|[1-9][0-9]{0,9})$/D'],
@@ -132,10 +132,9 @@ class NativeCryptoController extends Controller
     {
         $context = $this->context($request);
         $data = $request->validate(['registry_auth_version' => ['sometimes', 'integer', 'in:1,2'],
-            'registry_auth' => ['required', 'string', 'regex:/^[0-9a-f]{64}$/D'],
-            'account_recovery' => ['sometimes', 'required', 'array']]);
+            'registry_auth' => ['required', 'string', 'regex:/^[0-9a-f]{64}$/D']]);
 
-        return $this->response($this->crypto->retireKey($request->user()->id, $context, $keyId, $data['registry_auth'], (int) ($data['registry_auth_version'] ?? 1), $data['account_recovery'] ?? null));
+        return $this->response($this->crypto->retireKey($request->user()->id, $context, $keyId, $data['registry_auth'], (int) ($data['registry_auth_version'] ?? 1)));
     }
 
     public function rotate(Request $request): JsonResponse
@@ -184,6 +183,8 @@ class NativeCryptoController extends Controller
             throw new SyncProtocolException('request_too_large', 413);
         }
         $data = $request->validate([
+            'account_recovery' => ['missing'],
+            'recovery_secret' => ['missing'],
             'crypto' => ['required', 'array:epoch,revision'],
             'crypto.epoch' => ['required', 'uuid'],
             'crypto.revision' => ['required', 'string', 'regex:/^(0|[1-9][0-9]{0,9})$/D'],
