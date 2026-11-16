@@ -32,7 +32,6 @@ RUN apk add --no-cache \
     curl \
     sodium \
     intl \
-    opcache \
     && rm -rf /var/cache/apk/*
 
 # Copy PHP config
