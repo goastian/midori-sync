@@ -1,0 +1,23 @@
+{
+  "browser": [
+    {
+      "state": "sssssssssssssssssssssssssssssssssssssssssss",
+      "challenge": "ccccccccccccccccccccccccccccccccccccccccccc",
+      "redirect_uri": "http://127.0.0.1:41831/midori-sync/callback",
+      "device_type": "desktop",
+      "code": "A34EA-FD972"
+    },
+    {
+      "state": "sssssssssssssssssssssssssssssssssssssssssss",
+      "challenge": "ccccccccccccccccccccccccccccccccccccccccccc",
+      "redirect_uri": "org.midorinext.android:/midori-sync/callback",
+      "device_type": "mobile",
+      "code": "A327B-60448"
+    }
+  ],
+  "pairing": {
+    "server": "https://sync.astian.org/",
+    "token": "0123456789ABCDEF",
+    "code": "35E5F-E0E7A"
+  }
+}

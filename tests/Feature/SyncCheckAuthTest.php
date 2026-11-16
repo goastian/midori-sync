@@ -29,7 +29,7 @@ class SyncCheckAuthTest extends TestCase
             ->expectsOutputToContain('Direct public OIDC: disabled')
             ->assertSuccessful();
         $this->getJson('/api/v1/capabilities')->assertOk()
-            ->assertJsonPath('authentication.browser_login.version', 1)
+            ->assertJsonPath('authentication.browser_login.version', 2)
             ->assertJsonPath('authentication.oidc', null);
     }
 

@@ -14,6 +14,8 @@ use App\Services\SyncPairingService;
 use App\Services\SyncStorageService;
 use Database\Seeders\CollectionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -66,6 +68,89 @@ class NativeCryptoTest extends TestCase
     {
         return $this->postActivation(['crypto' => $this->context($this->state())] + $this->key())
             ->assertOk()->assertJsonPath('mode', 'native')->assertJsonPath('revision', '1')->json();
+    }
+
+    private function accountCapsule(array $state): array
+    {
+        return ['version' => 1, 'scope' => json_encode(['https://sync.astian.org/', SyncIdentityService::DEVELOPMENT_ISSUER, $this->user->authentik_id], JSON_THROW_ON_ERROR),
+            'epoch' => $state['epoch'], 'secret' => str_repeat('ab', 32), 'keys' => [$this->key()], 'identity_key' => $this->key(90)];
+    }
+
+    public function test_account_recovery_endpoints_never_store_or_disclose_secrets(): void
+    {
+        $state = $this->activate();
+        $before = $this->state();
+        $this->getJson('/api/v1/crypto/account-recovery')->assertConflict()
+            ->assertJsonPath('error', 'server_recovery_disabled')->assertJsonMissingPath('capsule');
+        $this->putJson('/api/v1/crypto/account-recovery', ['crypto' => $this->context($state),
+            'capsule' => $this->accountCapsule($state)])->assertConflict()->assertJsonPath('error', 'server_recovery_disabled');
+        $this->assertSame($before, $this->state());
+        $this->assertFalse(\Illuminate\Support\Facades\Schema::hasTable('sync_account_recovery'));
+        $this->getJson('/api/v1/capabilities')->assertOk()->assertJsonMissingPath('crypto.account_recovery_version');
+        $this->assertArrayNotHasKey('account_recovery', $state);
+        SyncSession::where('token_hash', hash('sha256', $this->token))->delete();
+        $this->getJson('/api/v1/crypto/account-recovery')->assertUnauthorized();
+        $this->putJson('/api/v1/crypto/account-recovery', [])->assertUnauthorized();
+    }
+
+    public function test_account_capsules_are_rejected_before_activation_mutates_state(): void
+    {
+        $before = $this->state();
+        foreach ([$this->accountCapsule($before), null, []] as $capsule) {
+            $this->postActivation(['crypto' => $this->context($before), 'registry_auth_version' => 2,
+                'account_recovery' => $capsule] + $this->key())->assertUnprocessable()->assertJsonValidationErrors('account_recovery');
+            $this->assertSame($before, $this->state());
+            $this->assertDatabaseCount('sync_native_keys', 0);
+        }
+    }
+
+    public function test_rotation_and_retirement_reject_account_capsules_without_changes(): void
+    {
+        $state = $this->activate();
+        $operation = (string) Str::uuid();
+        $rotation = ['crypto' => $this->context($state), 'operation_id' => $operation,
+            'keys' => [$this->key(), $this->key(2)], 'identity_key' => $this->key(90),
+            'registry_auth' => str_repeat('b', 64)] + $this->key(2);
+        $this->postJson('/api/v1/crypto/rotation', $rotation + ['account_recovery' => $this->accountCapsule($state)])
+            ->assertUnprocessable()->assertJsonValidationErrors('account_recovery');
+        $this->assertSame($state, $this->state());
+        $this->assertDatabaseCount('sync_key_rotations', 0);
+        $state = $this->postJson('/api/v1/crypto/rotation', $rotation)->assertOk()->json();
+        $state = $this->postJson('/api/v1/crypto/rotation/complete', ['crypto' => $this->context($state),
+            'operation_id' => $operation, 'registry_auth' => str_repeat('c', 64)])->assertOk()->json();
+        $body = ['crypto' => $this->context($state), 'registry_auth' => str_repeat('d', 64)];
+        $this->deleteJson('/api/v1/crypto/native-keys/'.$this->key()['key_id'], $body + ['account_recovery' => $this->accountCapsule($state)])
+            ->assertUnprocessable()->assertJsonValidationErrors('account_recovery');
+        $this->assertSame($state, $this->state());
+        $this->assertDatabaseCount('sync_native_keys', 2);
+        $this->deleteJson('/api/v1/crypto/native-keys/'.$this->key()['key_id'], $body)->assertOk();
+    }
+
+    public function test_account_recovery_migration_removes_previously_stored_capsules(): void
+    {
+        $state = $this->activate();
+        $generation = $this->generation();
+        $operation = $this->operation($generation, $state['active_key_id']);
+        $this->submit($state, $generation, $operation)->assertOk()->assertJsonPath('results.0.status', 'applied');
+        $create = require database_path('migrations/2026_10_28_000002_create_sync_account_recovery.php');
+        $remove = require database_path('migrations/2026_11_15_000001_remove_sync_account_recovery.php');
+        $create->up();
+        try {
+            DB::table('sync_account_recovery')->insert(['user_id' => $this->user->id, 'epoch' => $state['epoch'],
+                'registry_fingerprint' => str_repeat('a', 64),
+                'encrypted_capsule' => Crypt::encryptString(json_encode($this->accountCapsule($state))),
+                'created_at' => now(), 'updated_at' => now()]);
+            $this->getJson('/api/v1/crypto/account-recovery')->assertConflict()->assertJsonMissingPath('capsule');
+        } finally {
+            $remove->up();
+        }
+        $remove->up();
+        $remove->down();
+        $this->assertFalse(\Illuminate\Support\Facades\Schema::hasTable('sync_account_recovery'));
+        $this->assertSame($state, $this->state());
+        $this->assertDatabaseHas('records', ['record_id' => $operation['id'], 'payload' => $operation['payload']]);
+        $this->assertDatabaseCount('sync_native_keys', 1);
+        $this->assertSame($generation, $this->generation());
     }
 
     private function postActivation(array $body)
