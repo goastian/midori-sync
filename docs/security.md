@@ -144,6 +144,12 @@ proxies and telemetry; the local HTTP test is not a production TLS validation.
 
 ## 5. Rate Limiting and Quotas
 
+- Client IP attribution trusts only explicit internal proxy IPs/CIDRs configured
+  in `SYNC_TRUSTED_PROXIES`; an empty list trusts none. Trust is restricted to
+  forwarded address, scheme and port. In the Cloudflare deployment the host
+  Nginx resolves `CF-Connecting-IP` only from Cloudflare's published ranges,
+  then overwrites `X-Forwarded-For` with the resolved address. The container
+  stays private. See [deployment.md](deployment.md#trusted-client-addresses).
 - `sync` rate limiter with independent buckets:
   - `sync:r:*` (read, `SYNC_RATE_LIMIT_READ`).
   - `sync:w:*` (write, `SYNC_RATE_LIMIT_WRITE`).

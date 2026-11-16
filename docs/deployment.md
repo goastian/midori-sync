@@ -185,6 +185,73 @@ fallback in production.
 
 ### Reverse proxy templates
 
+#### Trusted client addresses
+
+Set `SYNC_TRUSTED_PROXIES` to a comma-separated list of the internal proxy IPs
+or narrow CIDRs that reach the container's Nginx. Laravel uses that list before
+rate limiting, authentication and security logging. An empty list trusts no
+forwarding headers. Wildcards, `REMOTE_ADDR`, hostnames and zero-prefix CIDRs
+are rejected during configuration loading. Only `X-Forwarded-For`,
+`X-Forwarded-Proto` and `X-Forwarded-Port` are trusted; `Forwarded`,
+`X-Forwarded-Host`, `X-Forwarded-Prefix` and Cloudflare headers are not read as
+client identity by Laravel.
+
+Determine the internal peer address from the container Nginx's safe access log
+for an ordinary request through the host proxy. That address becomes PHP's
+`REMOTE_ADDR` through FastCGI; it is not necessarily `127.0.0.1` inside a
+Podman or Docker bridge. For example, **only if that peer is `10.89.0.1`**:
+
+```env
+SYNC_TRUSTED_PROXIES=10.89.0.1
+```
+
+Keep the container port bound to loopback and reachable only by the host proxy.
+Do not trust the entire container subnet or all private networks. Compose passes
+this variable to the app; for Quadlet, `container/setup.sh` copies it from the
+project `.env` into the generated `EnvironmentFile`. Recreate/restart the app
+with the updated environment and rebuild `config:cache` as described above.
+Putting the variable only in the host shell does not update a running container.
+
+#### Cloudflare -> host Nginx -> container
+
+Use `container/nginx-reverse.conf` for this topology. Install its Cloudflare
+snippet before enabling or reloading the vhost:
+
+```bash
+sudo install -d /etc/nginx/snippets
+sudo install -m 644 container/nginx-cloudflare.conf /etc/nginx/snippets/midori-sync-cloudflare.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+The host Nginx needs `ngx_http_realip_module`. The snippet accepts
+`CF-Connecting-IP` only from the official Cloudflare IPv4/IPv6 ranges. Nginx
+then uses the resolved `$remote_addr` for its rate/connection limits and sends
+that single address in a freshly written `X-Forwarded-For` to the container.
+Client-supplied forwarding chains and unused forwarding headers are removed.
+Direct connections outside those ranges cannot select their own address with
+`CF-Connecting-IP`. Install the snippet in the Sync server block, including the
+TLS block if certbot creates a separate one; do not enable it globally for
+unrelated vhosts or in the container Nginx. Laravel trusts only the internal
+peer, not Cloudflare's public networks.
+
+Use Cloudflare **Full (strict)** with a valid origin certificate, and restrict
+origin ingress to Cloudflare's published ranges. Leave **Pseudo IPv4** off or
+in **Add Header** mode so it does not replace real IPv6 addresses. Do not enable
+a Managed Transform that removes visitor IP headers. Keep the snippet current
+with both official lists, review updates, run `nginx -t` and reload:
+
+- [Cloudflare IPv4 ranges](https://www.cloudflare.com/ips-v4)
+- [Cloudflare IPv6 ranges](https://www.cloudflare.com/ips-v6)
+- [Restoring visitor IPs](https://developers.cloudflare.com/support/troubleshooting/restoring-visitor-ips/restoring-original-visitor-ips/)
+
+Before considering the finding resolved in a deployment, verify with controlled
+clients that two public IPs have independent unauthenticated/failed-auth limits,
+an untrusted peer cannot change its identity using forwarding headers, and the
+security audit records the visitor IP. Use an isolated staging environment for
+limit-exhaustion checks. A shared public NAT still shares a per-IP allowance;
+this fix removes the shared proxy address from that decision.
+
 #### Caddy example
 
 ```
@@ -209,8 +276,12 @@ server {
         proxy_pass http://localhost:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Prefix "";
     }
 }
 
@@ -220,6 +291,10 @@ server {
     return 301 https://$host$request_uri;
 }
 ```
+
+The Caddy and external Nginx examples assume direct client connections. For
+Cloudflare in front, use the Cloudflare configuration above rather than
+forwarding Cloudflare's peer address as the visitor.
 
 ## Maintenance
 

@@ -57,6 +57,14 @@ bucket per IP, using `services.sync.unauth_rate_limit` over 60 seconds; after ex
 further lookups stop and return uncacheable `429 rate_limited` with `Retry-After`.
 `RateLimitTest`, `UnauthRateLimitTest` and `CorsTest` cover this ordering and isolation.
 
+Per-IP controls and audit events use Laravel's resolved client IP. Behind a proxy,
+operators must configure `SYNC_TRUSTED_PROXIES` and sanitize forwarding headers at
+the edge as described in [deployment.md](deployment.md#trusted-client-addresses).
+The Cloudflare -> host Nginx -> container deployment restores the visitor address
+at the host before forwarding it to Laravel. Desktop and Android do not supply
+their own trusted client-IP headers. `TrustedProxyTest` covers proxy attribution,
+spoofing resistance, audit IPs and isolation of unauthenticated/failed-auth limits.
+
 The `change_page_byte_budget` feature allows `GET /sync/collections/{name}/changes` to accept
 `max_bytes` from 32768 to 4194304. The server counts serialized changes including JSON
 escaping and reserves 16 KiB for cursor and response metadata. Desktop negotiates 2097152

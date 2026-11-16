@@ -9,6 +9,7 @@ services:
       - APP_ENV=${APP_ENV:-production}
       - APP_KEY=${APP_KEY}
       - APP_URL=${APP_URL:-http://localhost:8000}
+      - SYNC_TRUSTED_PROXIES=${SYNC_TRUSTED_PROXIES:-}
       - DB_CONNECTION=pgsql
       - DB_HOST=postgres
       - DB_PORT=5432
