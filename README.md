@@ -23,7 +23,7 @@ The updated status details and execution plan live in `docs/plan-status.md`.
 
 ### Backend
 
-- Laravel 13 with PHP 8.3+
+- Laravel 13 with PHP 8.5
 - REST API for sessions, records, devices, and crypto key bundles
 - `SyncAuthService` and `SyncStorageService` services
 - Middleware for quota checks, device tracking, CORS, and token validation
@@ -67,7 +67,7 @@ The former extension source is available in historical commit `33690ac8b621980de
 
 ### For Local Development
 
-- PHP 8.3+ with curl, intl, sodium and PostgreSQL extensions
+- PHP 8.5 with curl, intl, sodium and PostgreSQL extensions
 - Composer 2+
 - Node.js 20+
 - PostgreSQL 17+
